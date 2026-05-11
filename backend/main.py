@@ -6,6 +6,7 @@ from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 
 from backend.config import ensure_runtime_directories, settings
 from backend.schemas import (
@@ -92,7 +93,8 @@ async def predict(file: UploadFile = File(...)) -> PredictResponse:
     saved_upload = await save_upload_file(file)
 
     try:
-        prediction_result = shift_prediction_service.predict(
+        prediction_result = await run_in_threadpool(
+            shift_prediction_service.predict,
             file_path=saved_upload.path,
             original_name=saved_upload.original_name,
             use_cache=True,
@@ -115,7 +117,7 @@ async def predict(file: UploadFile = File(...)) -> PredictResponse:
 
 @app.post("/api/manual-predict", response_model=ManualPredictResponse)
 async def manual_predict(payload: ManualPredictRequest) -> ManualPredictResponse:
-    result = shift_prediction_service.manual_predict(payload.model_dump())
+    result = await run_in_threadpool(shift_prediction_service.manual_predict, payload.model_dump())
     return ManualPredictResponse(**result)
 
 
@@ -145,14 +147,16 @@ async def compare(
 
     try:
         started = perf_counter()
-        prediction_result = shift_prediction_service.predict_for_comparison(
+        prediction_result = await run_in_threadpool(
+            shift_prediction_service.predict_for_comparison,
             file_path=saved_transaction.path,
             original_name=saved_transaction.original_name,
         )
         timings["prediction_or_cache"] = perf_counter() - started
 
         started = perf_counter()
-        comparison_result = comparison_service.compare(
+        comparison_result = await run_in_threadpool(
+            comparison_service.compare,
             attendance_path=saved_attendance.path,
             attendance_name=saved_attendance.original_name,
             prediction_path=prediction_result.output_path,
