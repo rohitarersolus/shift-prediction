@@ -1,0 +1,14 @@
+{
+  "window_hours_after": 36,
+  "start_early_tol": 240,
+  "start_late_tol": 360,
+  "end_early_tol": 360,
+  "end_late_tol": 360,
+  "min_valid_span": 120,
+  "max_valid_span": 1080,
+  "sunday_rule": {
+    "enabled": true,
+    "with_transaction_status": "WO_REVIEW",
+    "with_transaction_message": "Worked on weekly off / possible overtime or extra duty"
+  }
+}

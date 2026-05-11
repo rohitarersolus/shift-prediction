@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Shift Prediction</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230b6b60'/%3E%3Cpath d='M18 34h28' stroke='white' stroke-width='6' stroke-linecap='round'/%3E%3Cpath d='M32 20v28' stroke='white' stroke-width='6' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/assets/styles.css?v=mismatch-filter-1">
+</head>
+<body>
+  <div class="page-shell">
+    <header class="page-header">
+      <div>
+        <p class="eyebrow">Operations Console</p>
+        <h1>Shift Prediction Review</h1>
+        <p class="page-subtitle">Upload attendance transactions, run the local shift engine, review results, and export the final CSV.</p>
+      </div>
+      <a class="secondary-button top-nav-link" href="/comparison">Comparison</a>
+    </header>
+
+    <section class="panel controls-panel">
+      <div class="panel-heading">
+        <div>
+          <h2>Transaction Upload</h2>
+          <p class="panel-subtitle">Supported formats: <code>.xls</code>, <code>.xlsx</code>, <code>.csv</code></p>
+        </div>
+        <button id="manual-predict-open" class="secondary-button" type="button">Manual Punch Test</button>
+      </div>
+
+      <form id="prediction-form" class="upload-form">
+        <input id="file-input" type="file" accept=".xls,.xlsx,.csv" hidden>
+
+        <div class="upload-grid">
+          <div class="upload-main">
+            <button id="dropzone" type="button" class="dropzone">
+              <span class="dropzone-title">Choose or drop a transaction file</span>
+              <span class="dropzone-subtitle">Drop the file here or click to browse from your machine.</span>
+            </button>
+
+            <div id="prediction-timer" class="prediction-timer" aria-live="polite">
+              <span class="prediction-timer-label">Prediction Time</span>
+              <span id="prediction-timer-value" class="prediction-timer-value">00:00.0</span>
+            </div>
+          </div>
+
+          <div class="upload-sidebar">
+            <div class="info-card">
+              <p class="meta-label">Selected File</p>
+              <p id="selected-file-name" class="meta-value">No file selected</p>
+            </div>
+
+            <div class="info-card">
+              <p class="meta-label">Required Columns</p>
+              <p class="meta-value">EmpCode, TransactionDateTime, ReaderNumber</p>
+              <p class="meta-note">ReaderNumber 1 is treated as IN. ReaderNumber 2 is treated as OUT. V3 day-first logic uses earliest same-day IN and latest same-day OUT first. Next-day OUT is used only when same-day OUT is missing.</p>
+            </div>
+
+            <div class="upload-actions">
+              <button id="predict-button" class="primary-button" type="submit">Run Prediction</button>
+              <p id="loading-indicator" class="loading-indicator" hidden>Processing file...</p>
+            </div>
+          </div>
+        </div>
+      </form>
+
+      <div id="error-banner" class="error-banner" hidden></div>
+    </section>
+
+    <section id="results-section" class="panel results-panel" hidden>
+      <div class="panel-heading panel-heading-results">
+        <div>
+          <h2>Prediction Results</h2>
+          <p class="panel-subtitle">Review raw transactions, candidate punch slices, and final shift decisions in the table, then inspect technical fields in the side panel.</p>
+        </div>
+      </div>
+
+      <div id="summary-grid" class="summary-grid"></div>
+
+      <div class="results-toolbar">
+        <div class="toolbar-filters">
+          <label class="search-field search-field-wide">
+            <span>Search</span>
+            <input id="search-input" type="search" placeholder="Search employee, status, shift, date...">
+          </label>
+
+          <label class="search-field">
+            <span>Status</span>
+            <select id="status-filter">
+              <option value="ALL">All statuses</option>
+            </select>
+          </label>
+
+          <label class="search-field">
+            <span>Shift</span>
+            <select id="shift-filter">
+              <option value="ALL">All shifts</option>
+            </select>
+          </label>
+
+          <label class="search-field">
+            <span>Mismatch</span>
+            <select id="mismatch-filter">
+              <option value="NONE">None</option>
+              <option value="ALL">All mismatch states</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="toolbar-actions">
+          <div class="table-meta">
+            <span id="result-count">0 rows</span>
+            <span id="page-indicator">Page 1</span>
+          </div>
+
+          <div class="pagination">
+            <button id="prev-page" class="ghost-button" type="button">Previous</button>
+            <button id="next-page" class="ghost-button" type="button">Next</button>
+          </div>
+
+          <a id="download-button" class="secondary-button" href="#" hidden>Download Clean CSV</a>
+          <a id="download-debug-button" class="ghost-button" href="#" hidden>Download Full Debug CSV</a>
+        </div>
+      </div>
+
+      <div class="results-layout">
+        <div class="table-shell">
+          <table id="results-table">
+            <thead id="table-head"></thead>
+            <tbody id="table-body"></tbody>
+          </table>
+          <div id="empty-state" class="empty-state" hidden>No rows match the current filters.</div>
+        </div>
+
+        <aside id="detail-panel" class="detail-panel">
+          <div class="detail-empty">Select a row to inspect model signals and advanced fields.</div>
+        </aside>
+      </div>
+    </section>
+  </div>
+
+  <dialog id="manual-predict-dialog" class="manual-dialog" aria-labelledby="manual-dialog-title">
+    <form id="manual-predict-form" class="manual-dialog-panel" method="dialog">
+      <div class="manual-dialog-header">
+        <div>
+          <p class="detail-kicker">Simulation Only</p>
+          <h2 id="manual-dialog-title">Manual Punch Prediction</h2>
+          <p class="manual-dialog-subtitle">This manual test uses the shift engine and employee history lookup. It does not update uploaded prediction results.</p>
+        </div>
+        <button id="manual-predict-close" class="ghost-button manual-close-button" type="button">Close</button>
+      </div>
+
+      <div class="manual-form-grid">
+        <label class="manual-field">
+          <span>Employee ID</span>
+          <input id="manual-employee-id" name="employee_id" type="text" autocomplete="off" required>
+        </label>
+
+        <label class="manual-field">
+          <span>Attendance Date</span>
+          <input id="manual-date" name="date" type="date" required>
+        </label>
+
+        <label class="manual-field">
+          <span>Punch In</span>
+          <input id="manual-punch-in" name="punch_in" type="datetime-local" step="60" required>
+        </label>
+
+        <label class="manual-field">
+          <span>Punch Out</span>
+          <input id="manual-punch-out" name="punch_out" type="datetime-local" step="60" required>
+        </label>
+
+        <label class="manual-field manual-field-wide">
+          <span>Extra Punch Times</span>
+          <textarea id="manual-extra-punches" name="extra_punches" rows="3" placeholder="Optional, one per line or comma-separated"></textarea>
+        </label>
+
+        <label class="manual-field manual-field-wide">
+          <span>Note</span>
+          <textarea id="manual-note" name="note" rows="2" placeholder="Optional"></textarea>
+        </label>
+      </div>
+
+      <div id="manual-error" class="error-banner manual-error" hidden></div>
+
+      <div class="manual-actions">
+        <button id="manual-predict-submit" class="primary-button" type="submit">Predict</button>
+        <button id="manual-predict-clear" class="ghost-button" type="button">Clear</button>
+      </div>
+
+      <section id="manual-result" class="manual-result" hidden></section>
+    </form>
+  </dialog>
+
+  <script src="/assets/app.js?v=mismatch-filter-2"></script>
+</body>
+</html>

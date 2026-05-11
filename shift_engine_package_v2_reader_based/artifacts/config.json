@@ -1,0 +1,24 @@
+{
+  "engine_version": "v2_reader_based",
+  "reader_in_number": 1,
+  "reader_out_number": 2,
+  "business_rules": {
+    "no_same_day_transaction": "ABSENT",
+    "sunday_with_same_day_transaction": "WO_REVIEW",
+    "reader_number_1": "Punch In",
+    "reader_number_2": "Punch Out"
+  },
+  "window_hours_after": 36,
+  "start_early_tol": 240,
+  "start_late_tol": 360,
+  "end_early_tol": 360,
+  "end_late_tol": 360,
+  "min_valid_span": 120,
+  "max_valid_span": 1080,
+  "model_classes": [
+    "PF",
+    "PGM",
+    "PS",
+    "PT"
+  ]
+}

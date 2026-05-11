@@ -1,0 +1,22 @@
+{
+  "PF": {
+    "start_min": 360.0,
+    "end_min": 840.0,
+    "duration_min": 480.0
+  },
+  "PGM": {
+    "start_min": 480.0,
+    "end_min": 990.0,
+    "duration_min": 510.0
+  },
+  "PS": {
+    "start_min": 840.0,
+    "end_min": 1320.0,
+    "duration_min": 480.0
+  },
+  "PT": {
+    "start_min": 1320.0,
+    "end_min": 1800.0,
+    "duration_min": 480.0
+  }
+}

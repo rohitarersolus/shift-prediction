@@ -1,0 +1,22 @@
+{
+  "engine_version": "v3_fixed_reader",
+  "reader_in_number": 1,
+  "reader_out_number": 2,
+  "business_rules": {
+    "no_same_day_transaction": "ABSENT",
+    "sunday_with_same_day_transaction": "WO_REVIEW",
+    "reader_number_1": "Punch In",
+    "reader_number_2": "Punch Out",
+    "punch_in_rule": "earliest same-day ReaderNumber 1",
+    "punch_out_rule": "latest ReaderNumber 2 after Punch In within 36-hour window"
+  },
+  "window_hours_after": 36,
+  "min_valid_span": 120,
+  "max_valid_span": 1080,
+  "model_classes": [
+    "PF",
+    "PGM",
+    "PS",
+    "PT"
+  ]
+}

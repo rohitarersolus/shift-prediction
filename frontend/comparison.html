@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Prediction Comparison</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230b6b60'/%3E%3Cpath d='M18 34h28' stroke='white' stroke-width='6' stroke-linecap='round'/%3E%3Cpath d='M32 20v28' stroke='white' stroke-width='6' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/assets/styles.css?v=v3-day-first-1">
+  <link rel="stylesheet" href="/assets/comparison.css?v=v3-day-first-1">
+</head>
+<body>
+  <div class="page-shell comparison-shell">
+    <header class="page-header comparison-header">
+      <div>
+        <p class="eyebrow">Benchmark Console</p>
+        <h1>Prediction vs Attendance Comparison</h1>
+        <p class="page-subtitle">Compare generated shift predictions against an attendance benchmark file without changing the transaction prediction workflow.</p>
+      </div>
+      <a class="ghost-button header-link" href="/">Back to Prediction</a>
+    </header>
+
+    <section class="panel controls-panel">
+      <div class="panel-heading">
+        <div>
+          <h2>Comparison Inputs</h2>
+          <p class="panel-subtitle">Upload the raw transaction file and attendance truth file. This page runs prediction first, then compares the result.</p>
+        </div>
+      </div>
+
+      <form id="comparison-form" class="upload-form">
+        <div class="comparison-input-grid">
+          <div class="comparison-upload-card">
+            <label class="search-field">
+              <span>Raw Transaction File</span>
+              <input id="transaction-file-input" type="file" accept=".xls,.xlsx,.csv" required>
+            </label>
+            <p id="transaction-file-name" class="comparison-file-note">No transaction file selected</p>
+          </div>
+
+          <div class="comparison-upload-card">
+            <label class="search-field">
+              <span>Attendance Truth File</span>
+              <input id="attendance-file-input" type="file" accept=".xls,.xlsx,.csv" required>
+            </label>
+            <p id="attendance-file-name" class="comparison-file-note">No attendance file selected</p>
+          </div>
+        </div>
+
+        <div class="comparison-actions">
+          <button id="compare-button" class="primary-button" type="submit">Run Prediction + Comparison</button>
+          <div id="comparison-timer" class="prediction-timer comparison-timer" aria-live="polite">
+            <span class="prediction-timer-label">Comparison Time</span>
+            <span id="comparison-timer-value" class="prediction-timer-value">00:00.0</span>
+          </div>
+          <p id="comparison-loading" class="loading-indicator" hidden>Running prediction and comparing files...</p>
+        </div>
+      </form>
+
+      <div id="comparison-error" class="error-banner" hidden></div>
+    </section>
+
+    <section id="comparison-results-section" class="panel results-panel" hidden>
+      <div class="panel-heading panel-heading-results">
+        <div>
+          <h2>Comparison Results</h2>
+          <p class="panel-subtitle">Main KPI: predicted final shift vs normalized attendance system shift. Coverage stays separate from shift and absence accuracy.</p>
+        </div>
+      </div>
+
+      <div id="comparison-summary-grid" class="summary-grid comparison-summary-grid"></div>
+
+      <div class="results-toolbar">
+        <div class="toolbar-filters">
+          <label class="search-field search-field-wide">
+            <span>Search</span>
+            <input id="comparison-search-input" type="search" placeholder="Search employee, date, shift, status...">
+          </label>
+
+          <label class="search-field">
+            <span>Result</span>
+            <select id="comparison-result-filter">
+              <option value="ALL">All results</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="toolbar-actions">
+          <div class="table-meta">
+            <span id="comparison-result-count">0 rows</span>
+            <span id="comparison-page-indicator">Page 1</span>
+          </div>
+
+          <div class="pagination">
+            <button id="comparison-prev-page" class="ghost-button" type="button">Previous</button>
+            <button id="comparison-next-page" class="ghost-button" type="button">Next</button>
+          </div>
+
+          <a id="comparison-download-button" class="secondary-button" href="#" hidden>Download Clean CSV</a>
+          <a id="comparison-download-debug-button" class="ghost-button" href="#" hidden>Download Full Debug CSV</a>
+        </div>
+      </div>
+
+      <div class="table-shell comparison-table-shell">
+        <table id="comparison-table">
+          <thead id="comparison-table-head"></thead>
+          <tbody id="comparison-table-body"></tbody>
+        </table>
+        <div id="comparison-empty-state" class="empty-state" hidden>No rows match the current filters.</div>
+      </div>
+    </section>
+  </div>
+
+  <script src="/assets/comparison.js?v=v3-day-first-1"></script>
+</body>
+</html>

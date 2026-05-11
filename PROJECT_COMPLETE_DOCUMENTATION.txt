@@ -1,0 +1,1490 @@
+SHIFT PREDICTION PROJECT - COMPLETE PROJECT DOCUMENTATION
+Generated on: 2026-04-30
+Project root: /Users/devappsolus/Documents/AMS/shift-prediction
+
+V3 UPDATE NOTE:
+The active website engine has been switched to `shift_engine_package_v3_fixed_reader/`.
+The active production logic is fixed ReaderNumber based:
+- ReaderNumber = 1 is Punch In.
+- ReaderNumber = 2 is Punch Out.
+- Punch In is the earliest same-day ReaderNumber 1.
+- Punch Out is the latest ReaderNumber 2 after Punch In within the 36-hour window.
+- Required upload columns are EmpCode, TransactionDateTime, and ReaderNumber.
+- The V3 engine creates the employee-date calendar itself and marks no same-day transaction as ABSENT.
+- The backend must not add duplicate calendar completion rows for V3 output.
+- The old `shift_engine_package/` and `shift_engine_package_v2_reader_based/` folders remain in the project only as backups.
+
+============================================================
+1. PROJECT PURPOSE
+============================================================
+
+This project is a local web application for predicting employee shifts from raw attendance transaction punch data.
+
+The main goal is:
+- Upload raw transaction files from the attendance/access system.
+- Use the existing production shift prediction engine.
+- Predict employee shift/day status for each employee-date.
+- Generate clean business CSV files and full debug CSV files.
+- Compare generated predictions against attendance truth/answer-key files.
+- Allow manual punch simulation for testing one employee/date scenario.
+
+The app is built as a FastAPI backend with static HTML/CSS/JavaScript frontend pages. The active machine learning model and core inference logic live inside the shift_engine_package_v3_fixed_reader directory.
+
+============================================================
+2. HIGH LEVEL ARCHITECTURE
+============================================================
+
+Main parts:
+
+1. Frontend
+   Location: frontend/
+   Purpose: Browser UI for file upload, prediction review, comparison, filtering, pagination, downloads, and manual punch tests.
+
+2. Backend
+   Location: backend/
+   Purpose: FastAPI server that receives files, validates inputs, calls the shift engine, writes outputs, compares prediction vs attendance truth, and serves frontend files.
+
+3. Active shift engine package
+   Location: shift_engine_package_v3_fixed_reader/
+   Purpose: V3 fixed-reader production inference package using LightGBM and business rules to transform ReaderNumber-based punches into shift predictions.
+
+4. Backup/older engine packages
+   Location: shift_engine_package/ and shift_engine_package_v2_reader_based/
+   Purpose: Older engine packages kept as backup. The active backend config points to shift_engine_package_v3_fixed_reader/artifacts.
+
+5. Runtime folders
+   uploads/: Temporary uploaded files are stored here during processing and deleted afterward.
+   outputs/: Prediction and comparison CSV output files are stored here.
+
+============================================================
+3. PROJECT STRUCTURE
+============================================================
+
+Important files and folders:
+
+backend/
+  __init__.py
+  config.py
+  main.py
+  schemas.py
+  services/
+    __init__.py
+    file_service.py
+    shift_service.py
+    comparison_service.py
+    calendar_completion_service.py
+
+frontend/
+  index.html
+  comparison.html
+  assets/
+    app.js
+    comparison.js
+    styles.css
+    comparison.css
+
+shift_engine_package/
+  app.py
+  inference.py
+  README.md
+  requirements.txt
+  artifacts/
+    config.json
+    feature_cols.json
+    label_classes.json
+    lightgbm_model.txt
+    shift_meta.json
+
+shift_engine_package_v2_reader_based/
+  app.py
+  inference.py
+  README.md
+  requirements.txt
+  artifacts/
+    config.json
+    feature_cols.json
+    label_classes.json
+    lightgbm_model.txt
+    shift_meta.json
+
+shift_engine_package_v3_fixed_reader/
+  app.py
+  inference.py
+  README.md
+  requirements.txt
+  artifacts/
+    config.json
+    feature_cols.json
+    label_classes.json
+    lightgbm_model.txt
+    shift_meta.json
+
+outputs/
+  Contains generated prediction and comparison CSV files.
+  At the time this document was created, there were 69 CSV output files:
+  - 53 prediction CSV files
+  - 16 comparison CSV files
+
+requirements.txt
+README.md
+shift_engine_package.zip
+
+============================================================
+4. TECHNOLOGY STACK
+============================================================
+
+Backend:
+- Python
+- FastAPI
+- Uvicorn
+- Pydantic
+- pandas
+- numpy
+- LightGBM
+- python-multipart
+- openpyxl
+- xlrd
+
+Frontend:
+- Static HTML
+- CSS
+- Vanilla JavaScript
+- Browser fetch API
+- Native dialog element for manual prediction modal
+
+Machine learning:
+- LightGBM model loaded from shift_engine_package_v3_fixed_reader/artifacts/lightgbm_model.txt
+- Model class labels loaded from label_classes.json
+- Feature list loaded from feature_cols.json
+- Shift metadata loaded from shift_meta.json
+- Engine configuration loaded from config.json
+
+============================================================
+5. HOW TO RUN THE PROJECT
+============================================================
+
+From the project root:
+
+1. Create virtual environment:
+   python3 -m venv .venv
+
+2. Activate virtual environment:
+   source .venv/bin/activate
+
+3. Install dependencies:
+   pip install -r requirements.txt
+
+4. Start the app:
+   uvicorn backend.main:app --reload
+
+5. Open in browser:
+   http://127.0.0.1:8000
+
+Comparison page:
+   http://127.0.0.1:8000/comparison
+
+============================================================
+6. BACKEND CONFIGURATION
+============================================================
+
+Configuration file:
+backend/config.py
+
+Important settings:
+
+- Project base directory is detected from backend/config.py parent folder.
+- Allowed upload extensions:
+  .csv, .xls, .xlsx
+
+- Maximum upload size:
+  25 MB
+
+- CORS origins:
+  http://localhost
+  http://localhost:3000
+  http://localhost:5173
+  http://127.0.0.1
+  http://127.0.0.1:3000
+  http://127.0.0.1:5173
+
+- Runtime directories:
+  uploads/
+  outputs/
+  frontend/
+  frontend/assets/
+
+- Active engine artifacts directory:
+  shift_engine_package_v3_fixed_reader/artifacts
+
+============================================================
+7. BACKEND API ENDPOINTS
+============================================================
+
+GET /
+Serves frontend/index.html.
+
+GET /comparison
+Serves frontend/comparison.html.
+
+GET /api/health
+Returns:
+  {"status": "ok"}
+
+POST /api/predict
+Input:
+  Multipart file field named file.
+
+Purpose:
+  Upload a raw transaction file and run shift prediction.
+
+Output:
+  file_name
+  output_file_name
+  generated_at
+  summary
+  row_count
+  columns
+  download_url
+  debug_download_url
+  data
+
+POST /api/manual-predict
+Input JSON:
+  employee_id
+  date
+  punch_in
+  punch_out
+  extra_punches
+  note
+
+Purpose:
+  Build an in-memory transaction dataframe for one employee/date and run the shift engine.
+
+Output:
+  employee_id
+  date
+  model_predicted_shift
+  model_confidence
+  historical_regular_shift
+  history_confidence
+  history_consistency
+  history_support
+  history_source
+  final_recommended_shift
+  status
+  message
+  raw_transactions_used
+  raw_transactions_text
+  note
+  engine_row
+
+GET /api/download/{file_name}
+Downloads a prediction CSV from outputs/.
+Security rule:
+  Only files inside outputs/ are allowed.
+
+POST /api/compare
+Input:
+  Multipart transaction_file
+  Multipart attendance_file
+
+Purpose:
+  Run prediction on the raw transaction file, then compare the generated prediction output against attendance truth data.
+
+Output:
+  output_file_name
+  generated_at
+  summary
+  row_count
+  columns
+  download_url
+  debug_download_url
+  data
+
+GET /api/download-comparison/{file_name}
+Downloads a comparison CSV from outputs/.
+Security rule:
+  File must exist inside outputs/ and file name must start with comparison-.
+
+============================================================
+8. FRONTEND PAGES AND FEATURES
+============================================================
+
+Main prediction page:
+frontend/index.html
+frontend/assets/app.js
+frontend/assets/styles.css
+
+Main prediction page features:
+- Operations Console header.
+- Transaction file upload area with drag/drop and click-to-browse.
+- Supports .xls, .xlsx, .csv.
+- Shows selected file name.
+- Shows required columns: EmpCode, TransactionDateTime, ReaderNumber.
+- Runs prediction by calling POST /api/predict.
+- Shows a live prediction timer.
+- Shows error messages from backend validation.
+- Shows summary cards:
+  Total Rows
+  Predicted
+  Review
+  Absent
+  Withheld
+  Worked on WO
+- Shows searchable/filterable results table.
+- Status filter based on final_status_label.
+- Shift filter based on final_shift.
+- Pagination with 20 rows per page.
+- Clean CSV download button.
+- Full debug CSV download button.
+- Row selection detail panel for advanced/model fields.
+- Manual Punch Test modal.
+
+Visible prediction table columns are selected from:
+- EmpCode_norm
+- attendance_day
+- punch_in_time
+- punch_out_time
+- prod_model_pred_shift
+- prod_model_confidence
+- final_day_status
+- final_shift
+- final_status_label
+- valid_pair_found
+- window_punch_count
+- pair_punch_count
+- final_message
+- raw_transactions
+- pair_preview
+
+Manual Punch Test frontend:
+- Opens a dialog from the main page.
+- Fields:
+  Employee ID
+  Attendance Date
+  Punch In
+  Punch Out
+  Extra Punch Times
+  Note
+- Calls POST /api/manual-predict.
+- Displays:
+  Model Predicted Shift
+  Model Confidence
+  Historical Regular Shift
+  History Confidence
+  Final Recommended Shift
+  Status
+  Message
+  Raw transactions used
+
+Comparison page:
+frontend/comparison.html
+frontend/assets/comparison.js
+frontend/assets/comparison.css
+
+Comparison page features:
+- Benchmark Console header.
+- Upload raw transaction file.
+- Upload attendance truth file.
+- Runs prediction and comparison by calling POST /api/compare.
+- Shows live comparison timer.
+- Shows coverage summary.
+- Shows shift answer-key accuracy summary.
+- Search across comparison rows.
+- Filter by comparison result.
+- Pagination with 25 rows per page.
+- Clean CSV download.
+- Full debug CSV download.
+
+Visible comparison table columns:
+- employee_id
+- date
+- attendance_punch_in_time
+- attendance_punch_out_time
+- transaction_first_in_time
+- transaction_last_out_time
+- attendance_truth_shift_family
+- predicted_final_shift
+- comparison_result
+- mismatch_reason
+
+============================================================
+9. INPUT FILE RULES
+============================================================
+
+Prediction input:
+Required logical columns:
+- EmpCode
+- TransactionDateTime
+- ReaderNumber
+
+Accepted employee id aliases:
+- EmpCode
+- EmployeeCode
+- PersonCode
+- PersonCode_norm
+- EmpCode_norm
+
+Accepted transaction datetime aliases:
+- TransactionDateTime
+- PunchDateTime
+- DateTime
+- TxnDateTime
+- Transaction_Time
+- PunchTime
+
+Optional transaction columns supported by the engine:
+- ReaderId
+- ReasonCode
+- TransactionCode
+
+File validation:
+- File extension must be .csv, .xls, or .xlsx.
+- File size must not exceed 25 MB.
+- File cannot be empty.
+- At least one valid TransactionDateTime must exist.
+- At least one non-empty EmpCode must exist.
+- ReaderNumber is required; 1 is IN and 2 is OUT.
+
+Comparison input:
+- Raw transaction file: same transaction rules as prediction.
+- Attendance truth file: must contain employee id, date, and either shift/status truth columns.
+
+Attendance employee aliases:
+- EmpCode_norm
+- EmpCode
+- PersonCode
+- EmployeeCode
+- EmployeeId
+- EmployeeID
+
+Attendance date aliases:
+- AttendanceDate
+- AccountingDate
+- attendance_day
+- Date
+
+Attendance shift aliases:
+- ShiftShortName
+- AssignedShiftShortName
+- Shift
+- FinalShift
+- final_shift
+
+Attendance status aliases:
+- AttendanceStatus
+- AbsentStatus
+- DayStatus
+- Status
+- FHStatus
+- SHStatus
+
+Punch columns supported for comparison display:
+- Punch In
+- PunchIn
+- PunchInTime
+- In Punch
+- InPunch
+- InPunchTime
+- In Time
+- InTime
+- First In
+- FirstIn
+- FirstInTime
+- First Punch
+- FirstPunch
+- FirstPunchTime
+- Actual In
+- ActualIn
+- ActualInTime
+- Punch Out
+- PunchOut
+- PunchOutTime
+- Out Punch
+- OutPunch
+- OutPunchTime
+- Out Time
+- OutTime
+- Last Out
+- LastOut
+- LastOutTime
+- Last Punch
+- LastPunch
+- LastPunchTime
+- Actual Out
+- ActualOut
+- ActualOutTime
+
+============================================================
+10. FILE UPLOAD AND STORAGE FLOW
+============================================================
+
+File handling service:
+backend/services/file_service.py
+
+Upload flow:
+1. Backend validates file name and extension.
+2. Backend creates a unique upload file name using timestamp and UUID.
+3. File is streamed to uploads/ in 1 MB chunks.
+4. Size is checked while streaming.
+5. If size exceeds 25 MB, upload is rejected.
+6. After prediction/comparison completes, uploaded temporary files are deleted.
+
+Error handling:
+- AppError is used for controlled user-facing errors.
+- Backend returns JSON with detail.
+- Some validation errors also include detected_columns and supported_aliases.
+- Unhandled exceptions return a generic 500 error and are logged.
+
+============================================================
+11. SHIFT PREDICTION SERVICE FLOW
+============================================================
+
+Main service:
+backend/services/shift_service.py
+
+Prediction flow:
+1. Receive saved upload path and original file name.
+2. Hash uploaded file using SHA-256.
+3. Optionally check prediction cache. Cache is mainly used by comparison workflow.
+4. Load transaction file using backend file parsing.
+5. Normalize employee and datetime column aliases to EmpCode and TransactionDateTime.
+6. Validate required data.
+7. Run shift_engine_package_v3_fixed_reader.run_inference_debug.
+8. Normalize V3 output columns for frontend/API compatibility.
+9. Skip backend calendar completion because the V3 engine already creates complete employee-date rows.
+10. Reorder important output columns.
+11. Write full debug CSV.
+12. Write clean business CSV.
+13. Build response summary.
+14. Convert result dataframe to JSON records for frontend.
+15. Build latest employee history cache for manual prediction support.
+
+Output file naming:
+- Full debug prediction:
+  {original-stem}-predictions-{YYYYMMDD-HHMMSS}.csv
+
+- Clean prediction:
+  {original-stem}-predictions-clean-{YYYYMMDD-HHMMSS}.csv
+
+Clean prediction export columns:
+- Employee ID
+- Date
+- Final Shift
+- Final Status Label
+- Final Day Status
+- Shift Status
+- Final Message
+- Same-Day Punch Count
+- Punch In
+- Punch Out
+- Valid Reader Pair Found
+- Raw Transactions
+- Candidate Punch Slice
+- Decision Reason
+
+Summary fields:
+- total_rows
+- SHIFT_PREDICTED
+- SHIFT_REVIEW
+- WITHHELD
+- ABSENT
+- WO
+- WO_REVIEW
+
+============================================================
+12. CALENDAR COMPLETION BUSINESS LOGIC
+============================================================
+
+Service:
+backend/services/calendar_completion_service.py
+
+Purpose:
+The shift engine only generates rows for employee-date combinations where transaction data exists. The backend adds missing employee-date rows so the output has a complete employee calendar for the uploaded transaction date range.
+
+How date range is detected:
+- Uses min and max TransactionDateTime from the uploaded transaction file.
+- Dates are normalized to calendar days.
+
+How employee list is detected:
+- Uses unique EmpCode values from the transaction file.
+
+Calendar generation:
+- Creates every employee/date combination from start date to end date.
+- Compares generated calendar keys against prediction rows.
+- Missing keys are created as backend-generated rows.
+
+Missing date rule:
+- final_day_status = ABSENT
+- final_shift = ABSENT
+- shift_status = rule_generated
+- final_status_label = ABSENT
+- final_message = No transaction found; marked as absent
+- row_source = backend_calendar_completion
+
+Rows generated by the model get:
+- row_source = model_prediction
+
+Holiday handling:
+- There is a HolidayProvider placeholder.
+- Current implementation always returns False for holidays.
+- No live holiday calendar is currently connected.
+
+Important limitation:
+- Calendar completion marks no-transaction days as ABSENT.
+- It does not currently infer leave, public holidays, approved off-days, or other HR exceptions.
+
+============================================================
+13. SHIFT ENGINE PACKAGE
+============================================================
+
+Active engine:
+shift_engine_package_v3_fixed_reader/inference.py
+
+The engine:
+- Loads transaction files.
+- Cleans and prepares raw punch data.
+- Builds employee-date windows.
+- Finds candidate in-out punch pairs.
+- Builds model features.
+- Runs LightGBM prediction.
+- Applies business rules.
+- Returns final output dataframe.
+
+Artifact files:
+
+label_classes.json:
+Model predicts these working shift classes:
+- PF
+- PGM
+- PS
+- PT
+
+shift_meta.json:
+Known shift schedules:
+
+PF:
+- start_min = 360
+- end_min = 840
+- duration_min = 480
+- clean_shift_days = 3628
+
+PS:
+- start_min = 840
+- end_min = 1320
+- duration_min = 480
+- clean_shift_days = 2870
+
+PGM:
+- start_min = 480
+- end_min = 990
+- duration_min = 510
+- clean_shift_days = 2443
+
+PT:
+- start_min = 1320
+- end_min = 1800
+- duration_min = 480
+- clean_shift_days = 1165
+
+KSS:
+- start_min = 900
+- end_min = 1380
+- duration_min = 480
+- clean_shift_days = 17
+
+MN:
+- start_min = 1380
+- end_min = 1860
+- duration_min = 480
+- clean_shift_days = 12
+
+KFS:
+- start_min = 420
+- end_min = 900
+- duration_min = 480
+- clean_shift_days = 11
+
+Note:
+- MN exists in shift_meta, but label_classes.json lists KFS, KSS, PF, PGM, PS, PT.
+
+config.json:
+- window_hours_after = 36
+- start_early_tol = 240 minutes
+- start_late_tol = 360 minutes
+- end_early_tol = 360 minutes
+- end_late_tol = 360 minutes
+- min_valid_span = 120 minutes
+- max_valid_span = 1080 minutes
+- Sunday rule enabled
+- Sunday with transaction status = WO_REVIEW
+- Sunday with transaction message = Worked on weekly off / possible overtime or extra duty
+
+feature_cols.json:
+Features used by LightGBM:
+- window_punch_count
+- window_large_gap_count
+- window_cluster_count
+- best_shift_score
+- best_shift_start_diff
+- best_shift_end_diff
+- best_shift_duration_diff
+- candidate_score_gap
+- pair_start_min
+- pair_end_min
+- pair_span_min
+- pair_punch_count
+- pair_outside_punch_count
+- pair_max_gap_min
+- pair_mean_gap_min
+- pair_unique_reader_count
+- pair_unique_reason_count
+- pair_unique_txncode_count
+- pair_next_day_flag
+- pair_overtime_like_flag
+- cnt_00_05
+- cnt_05_08
+- cnt_08_12
+- cnt_12_14
+- cnt_14_18
+- cnt_18_21
+- cnt_21_24
+- cnt_next_00_05
+- cnt_next_05_08
+- cnt_next_08_12
+
+============================================================
+14. ENGINE DATA PREPARATION
+============================================================
+
+The engine requires:
+- EmpCode
+- TransactionDateTime
+
+During preparation:
+1. TransactionDateTime is parsed as datetime.
+2. Invalid datetimes are removed.
+3. EmpCode_norm is created from EmpCode as stripped string.
+4. ReaderId, ReasonCode, TransactionCode are added as NaN if missing.
+5. Rows are sorted by EmpCode_norm and TransactionDateTime.
+
+The engine builds an employee transaction index containing:
+- timestamp array
+- timestamp integer nanosecond array
+- timestamp text array
+- reader values
+- reason values
+- transaction code values
+
+For each employee/date:
+- attendance_day is based on the transaction date normalized to midnight.
+- The engine looks at punches from attendance_day to attendance_day + 36 hours.
+- This supports normal shifts and overnight/next-day out punches.
+
+============================================================
+15. PUNCH PAIR CANDIDATE LOGIC
+============================================================
+
+For every employee/date window, the engine tries to find the best in-out pair candidate.
+
+Candidate search:
+- Uses all punches in the 36-hour window.
+- For each known shift, checks whether a start punch falls within that shift start tolerance.
+- Checks whether a later end punch falls within that shift end tolerance.
+- Rejects spans shorter than min_valid_span.
+- Rejects spans longer than max_valid_span.
+
+Pair scoring considers:
+- Difference from expected shift start time.
+- Difference from expected shift end time.
+- Difference from expected shift duration.
+- Number of punches inside selected pair.
+- Number of punches outside selected pair.
+- Penalties for short/long invalid spans.
+- Rewards for 3+ punches, close start, close end, and close duration.
+
+Pair score formula concept:
+- Lower score is better.
+- start_diff is weighted.
+- end_diff is weighted.
+- duration_diff is weighted.
+- outside punches add penalty.
+- very good alignment subtracts reward.
+
+If there is only one punch:
+- The engine still creates weak single-punch candidates with large penalty.
+- Business rules later withhold the result.
+
+The chosen candidate stores:
+- best_shift_candidate
+- best_shift_score
+- best_shift_start_diff
+- best_shift_end_diff
+- best_shift_duration_diff
+- second_shift_candidate
+- second_shift_score
+- candidate_score_gap
+- pair_first_punch
+- pair_last_punch
+- pair_start_min
+- pair_end_min
+- pair_span_min
+- pair_punch_count
+- valid_pair_found
+- pair_outside_punch_count
+- pair_max_gap_min
+- pair_mean_gap_min
+- pair_unique_reader_count
+- pair_unique_reason_count
+- pair_unique_txncode_count
+- pair_next_day_flag
+- pair_preview
+- raw_transactions
+
+Time bucket counts:
+- cnt_00_05
+- cnt_05_08
+- cnt_08_12
+- cnt_12_14
+- cnt_14_18
+- cnt_18_21
+- cnt_21_24
+- cnt_next_00_05
+- cnt_next_05_08
+- cnt_next_08_12
+
+Pair flags:
+- pair_no_punch_flag
+- pair_single_punch_flag
+- pair_overtime_like_flag
+- pair_manual_continuous_flag
+
+Pair confidence bucket:
+- very_high
+- high
+- medium
+- low
+- unknown
+
+Very high confidence bucket requires:
+- score <= 80
+- candidate score gap >= 50
+- start_diff <= 60
+- end_diff <= 90
+- duration_diff <= 90
+
+High confidence bucket requires:
+- score <= 120
+- candidate score gap >= 30
+
+Medium confidence bucket:
+- score <= 180
+
+Otherwise:
+- low
+
+============================================================
+16. MODEL SCORING
+============================================================
+
+The engine builds the model feature matrix using feature_cols.json.
+
+For every feature:
+- Values are converted to numeric.
+- Invalid/missing values are filled with -999.
+
+LightGBM predicts probabilities for each label class.
+
+The engine stores:
+- prod_model_pred_shift
+- prod_model_confidence
+- prod_prob_KFS
+- prod_prob_KSS
+- prod_prob_PF
+- prod_prob_PGM
+- prod_prob_PS
+- prod_prob_PT
+
+The final predicted class is the class with maximum probability.
+
+============================================================
+17. FINAL SHIFT BUSINESS RULES
+============================================================
+
+The core final decision logic is in ShiftEngine.apply_business_rules.
+
+Rule order matters. The first matching rule wins.
+
+Rule 1: Sunday with transaction
+- If is_sunday = 1:
+  final_shift = WO
+  final_day_status = WO
+  shift_status = review
+  final_status_label = WO_REVIEW
+  final_message = Worked on weekly off / possible overtime or extra duty
+  working_shift_hint = model prediction
+
+Rule 2: Single punch
+- If pair_single_punch_flag = 1:
+  final_shift = unknown
+  final_day_status = WITHHELD
+  shift_status = withheld
+  final_status_label = WITHHELD
+  final_message = Only one transaction found
+  working_shift_hint = model prediction
+
+Rule 3: No valid in-out pair
+- If valid_pair_found is false:
+  final_shift = unknown
+  final_day_status = WITHHELD
+  shift_status = withheld
+  final_status_label = WITHHELD
+  final_message = No valid in-out pair found
+  working_shift_hint = model prediction
+
+Rule 4: Manual/continuous-like pattern
+- If pair_manual_continuous_flag = 1:
+  final_shift = model prediction
+  final_day_status = WORKING
+  shift_status = review
+  final_status_label = SHIFT_REVIEW
+  final_message = Continuous/manual-like pattern; review required
+  working_shift_hint = model prediction
+
+Rule 5: Very high model confidence
+- If model confidence >= 0.995:
+  final_shift = model prediction
+  final_day_status = WORKING
+  shift_status = predicted
+  final_status_label = SHIFT_PREDICTED
+  final_message = High-confidence shift prediction
+
+Rule 6: Model and pair strongly agree
+- If model confidence >= 0.98 and model prediction equals pair candidate:
+  final_shift = model prediction
+  final_day_status = WORKING
+  shift_status = predicted
+  final_status_label = SHIFT_PREDICTED
+  final_message = Model and pair strongly agree
+
+Rule 7: Overnight shift anchored by pair pattern
+- If model prediction equals pair candidate
+- and pair_next_day_flag = 1
+- and start_diff <= 120
+- and duration_diff <= 120
+- and confidence >= 0.92:
+  final_shift = model prediction
+  final_day_status = WORKING
+  shift_status = predicted
+  final_status_label = SHIFT_PREDICTED
+  final_message = Overnight shift anchored by pair pattern
+
+Rule 8: Good-confidence prediction
+- If confidence >= 0.95
+- and pair candidate is missing, equals model prediction, or pair bucket is medium/unknown:
+  final_shift = model prediction
+  final_day_status = WORKING
+  shift_status = predicted
+  final_status_label = SHIFT_PREDICTED
+  final_message = Good-confidence shift prediction
+
+Rule 9: Model and pair agree but review suggested
+- If confidence >= 0.85 and model prediction equals pair candidate:
+  final_shift = model prediction
+  final_day_status = WORKING
+  shift_status = review
+  final_status_label = SHIFT_REVIEW
+  final_message = Model and pair agree; review suggested
+
+Rule 10: Overtime-like pattern
+- If pair_overtime_like_flag = 1 and confidence >= 0.80:
+  final_shift = model prediction
+  final_day_status = WORKING
+  shift_status = review
+  final_status_label = SHIFT_REVIEW
+  final_message = Overtime-like pattern; review suggested
+
+Rule 11: Low-confidence model output
+- If confidence >= 0.75:
+  final_shift = model prediction
+  final_day_status = WORKING
+  shift_status = review
+  final_status_label = SHIFT_REVIEW
+  final_message = Low-confidence model output; review suggested
+
+Rule 12: Ambiguous row
+- If none of the above apply:
+  final_shift = unknown
+  final_day_status = WITHHELD
+  shift_status = withheld
+  final_status_label = WITHHELD
+  final_message = Ambiguous row
+
+============================================================
+18. COMPARISON SERVICE BUSINESS LOGIC
+============================================================
+
+Service:
+backend/services/comparison_service.py
+
+Purpose:
+Compare generated prediction output against attendance truth data.
+
+Comparison flow:
+1. Read prediction CSV.
+2. Read attendance file.
+3. Promote header row if needed.
+4. Normalize prediction rows.
+5. Normalize attendance rows.
+6. Merge by employee_id and date using outer join.
+7. Mark coverage differences.
+8. Compare predicted shift vs normalized attendance shift family.
+9. Build summary metrics.
+10. Write full comparison CSV.
+11. Write clean comparison CSV.
+12. Return rows and summary to frontend.
+
+Comparison key:
+- employee_id
+- date
+
+Prediction normalization:
+- employee_id from prediction employee aliases.
+- date from prediction date aliases.
+- predicted_final_shift from final_shift.
+- predicted_final_status_label from final_status_label or shift_status/final_day_status aliases.
+- predicted_final_day_status from final_day_status.
+- transaction_first_in_time and transaction_last_out_time from punch columns or raw transaction text.
+- predicted_shift_norm normalizes shift code.
+- prediction_status_category is derived.
+- prediction_shift_bucket is derived.
+
+Attendance normalization:
+- employee_id from attendance employee aliases.
+- date from attendance date aliases.
+- attendance_truth_shift from shift aliases.
+- attendance_truth_status from status aliases.
+- attendance_punch_in_time and attendance_punch_out_time from punch aliases.
+- attendance_truth_shift_family is normalized.
+- attendance_status_category is derived.
+
+Deduplication:
+- Duplicate employee/date rows are dropped, keeping the first row.
+
+============================================================
+19. SHIFT NORMALIZATION AND ATTENDANCE FAMILY MAPPING
+============================================================
+
+General shift normalization:
+- Converts value to uppercase.
+- Empty, NULL, NAN, NONE, NAT, UNKNOWN become blank.
+- If shift ends with W and the base shift is known, the W is removed.
+
+Base shift codes:
+- KFS
+- KSS
+- PF
+- PGM
+- PS
+- PT
+
+Attendance shift family mapping:
+- PFW -> PF
+- PF -> PF
+- PSW -> PS
+- PS -> PS
+- PTW -> PT
+- PT -> PT
+- PG -> PGM
+- PGM -> PGM
+- PGW -> PGM
+
+Non-working shift codes:
+- WO
+- OFF
+- HOLIDAY
+- LEAVE
+- ABSENT
+
+============================================================
+20. COMPARISON RESULT TYPES
+============================================================
+
+Coverage results:
+
+MISSING_IN_ATTENDANCE
+- Prediction row exists but no matching attendance row exists.
+
+MISSING_IN_PREDICTION
+- Attendance row exists but no matching prediction row exists.
+
+Shift comparison results:
+
+MATCH
+- Prediction and attendance answer key match.
+- Used for hard predicted rows, not review rows.
+
+SHIFT_MISMATCH
+- Prediction and attendance answer key do not match.
+- Used for hard predicted rows.
+
+REVIEW_MATCH
+- Review prediction matches attendance answer key.
+- Kept separate from hard predicted matches.
+
+REVIEW_MISMATCH
+- Review prediction does not match attendance answer key.
+- Kept separate from hard predicted mismatches.
+
+NON_WORKING_EXCLUDED
+- Row is excluded from shift accuracy because attendance truth is non-working or not comparable.
+
+Mismatch reasons:
+- no matching attendance row
+- no matching prediction row
+- prediction does not match attendance answer key
+- review prediction does not match attendance answer key
+- excluded non-working truth row
+
+============================================================
+21. COMPARISON SUMMARY METRICS
+============================================================
+
+Coverage:
+- attendance_total_rows
+- prediction_total_rows
+- matched_rows
+- missing_in_prediction
+- missing_in_attendance
+- coverage_percent
+
+Shift accuracy:
+- comparable_working_shift_rows
+- comparable_shift_rows
+- predicted_only_shift_accuracy_percent
+- assigned_shift_accuracy_percent
+- exact_shift_matches
+- exact_shift_mismatches
+- review_shift_matches
+- review_shift_mismatches
+- non_working_excluded
+- shift_mismatches
+
+Accuracy rules:
+- Shift answer-key accuracy is calculated only on matched comparable shift rows.
+- WO, leave, absent, missing truth shift, missing prediction, and missing attendance rows are excluded from comparable working shift accuracy.
+- Review rows are reported separately as review matches/mismatches.
+- predicted_only_shift_accuracy_percent uses only MATCH and SHIFT_MISMATCH.
+- assigned_shift_accuracy_percent includes MATCH, SHIFT_MISMATCH, REVIEW_MATCH, and REVIEW_MISMATCH.
+
+============================================================
+22. CLEAN AND DEBUG OUTPUTS
+============================================================
+
+Prediction outputs:
+
+Full debug CSV:
+- Contains model/debug columns and probability columns.
+- Used for technical analysis.
+
+Clean prediction CSV:
+- Business-friendly format.
+- Header:
+  Employee ID, Date, Final Shift, Day Status, Prediction Status, Shift Status, Final Message, Punch In, Punch Out, Raw Transactions, Candidate Punch Slice, Row Source
+
+Comparison outputs:
+
+Full debug comparison CSV:
+- Contains normalized comparison columns and internal result columns.
+
+Clean comparison CSV:
+- Business-friendly format.
+- Header:
+  Employee ID, Date, Attendance Punch In, Attendance Punch Out, Transaction First In, Transaction Last Out, Attendance Shift, Attendance Shift Family, Predicted Shift, Prediction Status, Comparison Result, Mismatch Reason
+
+Output naming examples:
+- pat_transaction_data-predictions-20260429-105636.csv
+- pat_transaction_data-predictions-clean-20260429-105636.csv
+- comparison-pat_transaction_data-predictions-20260429-105636-vs-pat_att_data-20260429-105703.csv
+- comparison-pat_transaction_data-predictions-20260429-105636-vs-pat_att_data-clean-20260429-105703.csv
+
+============================================================
+23. MANUAL PREDICTION LOGIC
+============================================================
+
+Manual prediction endpoint:
+POST /api/manual-predict
+
+Purpose:
+Test one employee/date with supplied punch times without uploading a full file.
+
+Input rules:
+- employee_id is required.
+- date is required and must parse as date.
+- punch_in is required.
+- punch_out is required.
+- extra_punches are optional.
+- extra_punches may be a list or comma/newline separated text.
+
+Time parsing:
+- Punch values may be time-only or full datetime.
+- Time-only punches are attached to the selected attendance date.
+- If punch_out is time-only and is earlier than punch_in, punch_out is moved to the next day.
+- Extra time-only punches earlier than punch_in are moved to the next day.
+
+Window rule:
+- Uses the engine's window_hours_after value, currently 36 hours.
+- At least two punches must be inside the attendance date window.
+
+Manual transaction dataframe columns:
+- EmpCode
+- TransactionDateTime
+- ReaderId
+- ReasonCode
+- TransactionCode
+
+Employee history:
+- After a normal prediction run, backend builds latest employee history from SHIFT_PREDICTED rows.
+- It finds the most common final_shift per employee.
+- It calculates confidence as top_count / support.
+- A history is strong if support >= 3 and confidence >= 0.70.
+- Manual prediction also looks for saved history artifacts:
+  shift_engine_package/artifacts/employee_history.json
+  shift_engine_package/artifacts/employee_shift_history.json
+  shift_engine_package/artifacts/employee_history.csv
+  shift_engine_package/artifacts/employee_shift_history.csv
+  outputs/employee_history.json
+  outputs/employee_shift_history.json
+  outputs/employee_history.csv
+  outputs/employee_shift_history.csv
+
+============================================================
+24. CACHING AND PERFORMANCE LOGGING
+============================================================
+
+Prediction cache:
+- Stored in memory in ShiftPredictionService.
+- Keyed by SHA-256 file hash.
+- Used by predict_for_comparison.
+- Cache stores output file paths and generated_at.
+- Cache does not persist after server restart.
+
+Performance logging:
+Backend logs timings for:
+- file hash
+- file load
+- transaction normalization
+- validation
+- engine prediction
+- pair validity normalization
+- calendar completion
+- CSV generation
+- response serialization
+- total request time
+
+Comparison logs timings for:
+- upload save
+- prediction or cache
+- comparison only
+- total
+
+Shift engine logs timings for:
+- transaction preprocessing
+- employee indexing
+- employee-day grouping
+- feature row generation
+- model inference
+- final business rules
+- total inference
+
+============================================================
+25. SERVICES PROVIDED BY THIS PROJECT
+============================================================
+
+1. Shift prediction service
+- Converts raw punch transaction data into shift/day status predictions.
+
+2. Business clean export service
+- Produces business-friendly prediction CSV files.
+
+3. Technical debug export service
+- Produces full technical prediction CSV files for analysis.
+
+4. Calendar completion service
+- Adds absent rows for missing employee/date combinations in the uploaded transaction date range.
+
+5. Prediction vs attendance comparison service
+- Benchmarks prediction output against attendance truth files.
+
+6. Accuracy and coverage reporting service
+- Reports matched rows, missing rows, coverage, shift accuracy, exact matches, review matches, mismatches, and excluded rows.
+
+7. Manual punch simulation service
+- Allows one employee/date punch scenario to be tested through the same shift engine.
+
+8. Download service
+- Provides secure download endpoints for prediction and comparison CSV outputs.
+
+9. Static web UI service
+- Serves prediction and comparison browser pages.
+
+============================================================
+26. WHAT HAS BEEN BUILT SO FAR
+============================================================
+
+Based on the current project files, the following work has already been completed:
+
+1. FastAPI backend application was created.
+2. Static frontend prediction page was created.
+3. Static frontend comparison page was created.
+4. Production shift engine package was integrated into backend.
+5. Upload validation was added.
+6. File size limit was added.
+7. Supported file extensions were added.
+8. Required column validation was added.
+9. Column alias support was added for transaction uploads.
+10. Output folder generation was added.
+11. Temporary upload cleanup was added.
+12. Full debug prediction CSV export was added.
+13. Clean business prediction CSV export was added.
+14. Summary cards were added to the frontend.
+15. Search, status filter, shift filter, and pagination were added.
+16. Detail panel for row/model signals was added.
+17. Prediction timer was added.
+18. Clean and debug download buttons were added.
+19. Comparison workflow was added.
+20. Comparison runs prediction first and then compares to attendance truth.
+21. Comparison summary cards for coverage and accuracy were added.
+22. Comparison search/filter/pagination were added.
+23. Clean and debug comparison exports were added.
+24. Attendance shift family normalization was added.
+25. Review rows were separated from hard predicted rows in comparison.
+26. Calendar completion was added to mark missing employee-date rows as ABSENT.
+27. Manual punch test modal was added.
+28. Manual prediction backend endpoint was added.
+29. Latest employee history cache was added for manual prediction context.
+30. Prediction cache for comparison was added.
+31. Timing logs were added for prediction and comparison performance.
+32. A ReaderNumber-based v2 engine package exists as a separate package/archive.
+33. Many prediction and comparison output files have already been generated in outputs/.
+
+============================================================
+27. CURRENT LIMITATIONS AND IMPORTANT NOTES
+============================================================
+
+1. This app is local.
+- It is not currently set up as a deployed/cloud service in the files inspected.
+
+2. No database is used.
+- Outputs are stored as CSV files.
+- Cache is in memory only.
+
+3. No authentication is present.
+- Anyone with access to the running local server can use the pages.
+
+4. Calendar completion marks no-transaction days as ABSENT.
+- It does not check leave, approved weekly off schedules, holidays, or HR rosters.
+
+5. HolidayProvider is a placeholder.
+- It currently returns false for every date.
+
+6. Attendance files are used only as benchmark/answer-key data.
+- Attendance truth does not influence prediction.
+
+7. Comparison deduplicates employee/date rows by keeping the first.
+- If source files contain multiple truth rows for one employee/date, only the first normalized row is compared.
+
+8. Prediction cache is not persistent.
+- Restarting the backend clears it.
+
+9. Older engine folders exist but are not the active backend engine.
+- The active backend engine uses shift_engine_package_v3_fixed_reader/artifacts.
+
+10. The project directory is not currently a git repository.
+- git status returned: fatal: not a git repository.
+
+============================================================
+28. QUICK A-Z PROJECT SUMMARY
+============================================================
+
+A - App:
+FastAPI app serving a shift prediction and comparison web UI.
+
+B - Backend:
+Handles uploads, validation, prediction, comparison, downloads, and errors.
+
+C - Calendar completion:
+Adds missing employee/date rows and marks them ABSENT.
+
+D - Downloads:
+Clean and debug CSV downloads are available for prediction and comparison.
+
+E - Engine:
+LightGBM-based V3 fixed-reader shift engine in shift_engine_package_v3_fixed_reader.
+
+F - Frontend:
+Static HTML/CSS/JS pages for operations and benchmark workflows.
+
+G - Generated files:
+Outputs are written to outputs/ with timestamped names.
+
+H - Health:
+/api/health returns ok.
+
+I - Inputs:
+Accepts .csv, .xls, and .xlsx transaction and attendance files.
+
+J - JSON:
+APIs return JSON responses with data, columns, summary, and download links.
+
+K - Known shifts:
+PF, PGM, PS, PT are active model label classes.
+
+L - Logic:
+Business rules decide predicted, review, withheld, absent, and weekly-off statuses.
+
+M - Manual prediction:
+One employee/date punch scenario can be tested manually.
+
+N - Normalization:
+Employee/date/shift/status column aliases and shift families are normalized.
+
+O - Outputs:
+Both business-friendly clean files and full debug files are produced.
+
+P - Prediction:
+Raw transaction punches are converted into final_shift and final_status_label.
+
+Q - Quality checks:
+Validation catches empty files, missing columns, invalid datetimes, invalid employees, unsupported file types, and oversized uploads.
+
+R - Review:
+Uncertain rows are marked SHIFT_REVIEW or WO_REVIEW instead of being counted as hard predictions.
+
+S - Summary:
+Frontend shows summary cards for prediction and comparison metrics.
+
+T - Timings:
+Backend and engine log request and inference timing.
+
+U - Uploads:
+Temporary uploaded files are saved to uploads/ and deleted after processing.
+
+V - Validation:
+Required columns and supported aliases are checked before prediction.
+
+W - Weekly off:
+Sunday transactions are marked WO_REVIEW.
+
+X - Excel:
+.xls and .xlsx files are supported through pandas/openpyxl/xlrd fallback behavior.
+
+Y - Year/date handling:
+Prediction uses actual transaction dates and a 36-hour window from each employee attendance day.
+
+Z - Zero transaction days:
+Missing employee-date transaction rows are filled as ABSENT by the V3 engine calendar.
+
+============================================================
+END OF DOCUMENTATION
+============================================================

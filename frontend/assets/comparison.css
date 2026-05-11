@@ -1,0 +1,222 @@
+.comparison-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.header-link {
+  margin-top: 4px;
+}
+
+.comparison-input-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.comparison-upload-card {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--panel-soft);
+}
+
+.comparison-file-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.comparison-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.comparison-timer {
+  min-height: 38px;
+}
+
+.comparison-summary-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+
+.comparison-summary-section {
+  display: grid;
+  gap: 8px;
+}
+
+.comparison-summary-section h3 {
+  margin: 0;
+  color: #314046;
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.comparison-summary-cards {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.comparison-table-shell table {
+  min-width: 1480px;
+}
+
+th.col-employee_id,
+td.col-employee_id {
+  min-width: 120px;
+}
+
+th.col-date,
+td.col-date {
+  min-width: 118px;
+}
+
+th.col-attendance_punch_in_time,
+td.col-attendance_punch_in_time,
+th.col-attendance_punch_out_time,
+td.col-attendance_punch_out_time,
+th.col-transaction_first_in_time,
+td.col-transaction_first_in_time,
+th.col-transaction_last_out_time,
+td.col-transaction_last_out_time {
+  min-width: 170px;
+}
+
+th.col-predicted_final_shift,
+td.col-predicted_final_shift,
+th.col-attendance_truth_shift_family,
+td.col-attendance_truth_shift_family {
+  min-width: 150px;
+}
+
+th.col-comparison_result,
+td.col-comparison_result {
+  min-width: 190px;
+}
+
+th.col-mismatch_reason,
+td.col-mismatch_reason {
+  min-width: 260px;
+}
+
+.comparison-result-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 10px;
+  border-radius: var(--radius-pill);
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.comparison-result-match {
+  background: var(--good);
+  color: #11584d;
+}
+
+.comparison-result-mismatch {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.comparison-result-shift_mismatch,
+.comparison-result-status_mismatch,
+.comparison-result-review_mismatch {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.comparison-result-review_match {
+  background: var(--review);
+  color: #7b5416;
+}
+
+.comparison-result-withheld {
+  background: var(--withheld);
+  color: #7e4254;
+}
+
+.comparison-result-non_working_excluded {
+  background: #eef2f3;
+  color: #4c5a61;
+}
+
+.comparison-result-missing_in_prediction {
+  background: var(--withheld);
+  color: #7e4254;
+}
+
+.comparison-result-missing_in_attendance {
+  background: var(--wo);
+  color: #3c63ab;
+}
+
+.comparison-layer-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 9px;
+  border-radius: var(--radius-pill);
+  background: #eef2f3;
+  color: #4c5a61;
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+tr.result-mismatch {
+  background: #fff8f5;
+}
+
+tr.result-shift_mismatch,
+tr.result-status_mismatch,
+tr.result-review_mismatch {
+  background: #fff8f5;
+}
+
+tr.result-non_working_excluded {
+  background: #fbfcfc;
+}
+
+tr.result-missing_in_prediction,
+tr.result-missing_in_attendance {
+  background: #fbfcfc;
+}
+
+@media (max-width: 1180px) {
+  .comparison-summary-cards {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .comparison-header,
+  .comparison-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .comparison-input-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .comparison-summary-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+.qodo/
+shift_engine_package.zip
+uploads/*
+!uploads/.gitkeep
+outputs/*
+!outputs/.gitkeep
