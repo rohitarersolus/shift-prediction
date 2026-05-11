@@ -1,4 +1,5 @@
 import hashlib
+import importlib
 import json
 import logging
 import re
@@ -12,8 +13,6 @@ import pandas as pd
 
 from backend.config import settings
 from backend.services.file_service import AppError
-from shift_engine_package_v3_day_first_reader.inference import CONFIG as ENGINE_CONFIG
-from shift_engine_package_v3_day_first_reader.inference import LABEL_CLASSES, run_inference_debug
 
 
 REQUIRED_COLUMNS = ("EmpCode", "TransactionDateTime", "ReaderNumber")
@@ -72,10 +71,49 @@ class PredictionCacheEntry:
 
 class ShiftPredictionService:
     def __init__(self) -> None:
-        self.engine_config = ENGINE_CONFIG
-        self.model_classes = list(LABEL_CLASSES)
+        self.engine_config = self._load_engine_config_metadata()
+        self.model_classes = self._load_label_classes_metadata()
+        self._engine_module: Any | None = None
         self._prediction_cache: dict[str, PredictionCacheEntry] = {}
         self._latest_employee_history: dict[str, dict[str, Any]] = {}
+
+    def _load_engine_config_metadata(self) -> dict[str, Any]:
+        config_path = settings.engine_artifacts_dir / "config.json"
+        if not config_path.exists():
+            return {"engine_version": settings.engine_version, "window_hours_after": 48}
+
+        try:
+            with config_path.open("r", encoding="utf-8") as input_file:
+                return json.load(input_file)
+        except Exception:
+            logger.exception("Failed to read engine config metadata: %s", config_path)
+            return {"engine_version": settings.engine_version, "window_hours_after": 48}
+
+    def _load_label_classes_metadata(self) -> list[str]:
+        label_path = settings.engine_artifacts_dir / "label_classes.json"
+        if not label_path.exists():
+            return ["PF", "PGM", "PS", "PT"]
+
+        try:
+            with label_path.open("r", encoding="utf-8") as input_file:
+                labels = json.load(input_file)
+        except Exception:
+            logger.exception("Failed to read label class metadata: %s", label_path)
+            return ["PF", "PGM", "PS", "PT"]
+
+        return list(labels) if isinstance(labels, list) else ["PF", "PGM", "PS", "PT"]
+
+    def _engine(self) -> Any:
+        if self._engine_module is None:
+            started = perf_counter()
+            self._engine_module = importlib.import_module("shift_engine_package_v3_day_first_reader.inference")
+            self.engine_config = dict(getattr(self._engine_module, "CONFIG", self.engine_config))
+            self.model_classes = list(getattr(self._engine_module, "LABEL_CLASSES", self.model_classes))
+            logger.info("Loaded shift engine module in %.3fs", perf_counter() - started)
+        return self._engine_module
+
+    def _run_inference_debug(self, input_path: Path) -> pd.DataFrame:
+        return self._engine().run_inference_debug(str(input_path))
 
     def predict(
         self,
@@ -133,7 +171,7 @@ class ShiftPredictionService:
             started = perf_counter()
             normalized_input_path = self._write_normalized_engine_input(transaction_df, original_name)
             try:
-                result_df = run_inference_debug(str(normalized_input_path))
+                result_df = self._run_inference_debug(normalized_input_path)
             finally:
                 normalized_input_path.unlink(missing_ok=True)
             result_df = self._normalize_engine_result_df(result_df)
@@ -231,7 +269,7 @@ class ShiftPredictionService:
         try:
             normalized_input_path = self._write_normalized_engine_input(transaction_df, f"manual-{employee_id}.csv")
             try:
-                result_df = run_inference_debug(str(normalized_input_path))
+                result_df = self._run_inference_debug(normalized_input_path)
             finally:
                 normalized_input_path.unlink(missing_ok=True)
             result_df = self._normalize_engine_result_df(result_df)

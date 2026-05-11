@@ -65,6 +65,11 @@ async def index() -> FileResponse:
     return FileResponse(settings.frontend_dir / "index.html")
 
 
+@app.head("/", include_in_schema=False)
+async def index_head() -> JSONResponse:
+    return JSONResponse(content={})
+
+
 @app.get("/comparison", include_in_schema=False)
 async def comparison() -> FileResponse:
     return FileResponse(settings.frontend_dir / "comparison.html")
