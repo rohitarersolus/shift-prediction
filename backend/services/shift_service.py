@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import hashlib
 import importlib
 import json
@@ -7,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
-from typing import Any
+from typing import Any, Optional
 
 import pandas as pd
 
@@ -43,6 +45,7 @@ SUPPORTED_ALIASES = {
 }
 
 logger = logging.getLogger("shift_prediction")
+MAX_PREDICTION_DF_CACHE_SIZE = 3
 
 
 @dataclass
@@ -69,12 +72,28 @@ class PredictionCacheEntry:
     generated_at: datetime
 
 
+@dataclass
+class PredictionPageResult:
+    output_file_name: str
+    columns: list[str]
+    page: int
+    page_size: int
+    total_pages: int
+    total_rows: int
+    filtered_row_count: int
+    available_statuses: list[str]
+    available_shifts: list[str]
+    available_mismatch_states: list[str]
+    records: list[dict[str, Any]]
+
+
 class ShiftPredictionService:
     def __init__(self) -> None:
         self.engine_config = self._load_engine_config_metadata()
         self.model_classes = self._load_label_classes_metadata()
-        self._engine_module: Any | None = None
+        self._engine_module: Optional[Any] = None
         self._prediction_cache: dict[str, PredictionCacheEntry] = {}
+        self._prediction_df_cache: dict[str, pd.DataFrame] = {}
         self._latest_employee_history: dict[str, dict[str, Any]] = {}
 
     def _load_engine_config_metadata(self) -> dict[str, Any]:
@@ -205,6 +224,7 @@ class ShiftPredictionService:
         timings["response_serialization"] = perf_counter() - started
         timings["total"] = perf_counter() - total_started
         self._latest_employee_history = self._build_employee_history(result_df)
+        self._cache_prediction_df(output_path.name, result_df)
 
         logger.info(
             "Prediction timing summary for %s: file_load=%.3fs normalize=%.3fs validation=%.3fs engine=%.3fs pair_validity=%.3fs calendar_completion=%.3fs csv=%.3fs response=%.3fs total=%.3fs rows=%s",
@@ -252,6 +272,48 @@ class ShiftPredictionService:
             use_cache=True,
         )
 
+    def get_prediction_page(
+        self,
+        prediction_name: str,
+        *,
+        page: int = 1,
+        page_size: int = 20,
+        search: str = "",
+        status: str = "ALL",
+        shift: str = "ALL",
+        mismatch: str = "NONE",
+    ) -> PredictionPageResult:
+        result_df = self._load_prediction_df(prediction_name)
+        filtered_df = self._filter_prediction_df(
+            result_df,
+            search=search,
+            status=status,
+            shift=shift,
+            mismatch=mismatch,
+        )
+
+        safe_page_size = max(1, min(page_size, 200))
+        filtered_row_count = int(len(filtered_df))
+        total_rows = int(len(result_df))
+        total_pages = max(1, (filtered_row_count + safe_page_size - 1) // safe_page_size)
+        safe_page = max(1, min(page, total_pages))
+        start_index = (safe_page - 1) * safe_page_size
+        page_df = filtered_df.iloc[start_index : start_index + safe_page_size].copy()
+
+        return PredictionPageResult(
+            output_file_name=Path(prediction_name).name,
+            columns=result_df.columns.tolist(),
+            page=safe_page,
+            page_size=safe_page_size,
+            total_pages=total_pages,
+            total_rows=total_rows,
+            filtered_row_count=filtered_row_count,
+            available_statuses=self._sorted_unique_values(result_df, "final_status_label"),
+            available_shifts=self._sorted_unique_values(result_df, "final_shift"),
+            available_mismatch_states=self._sorted_unique_values(result_df, "prediction_mismatch_status"),
+            records=self._to_records(page_df),
+        )
+
     def manual_predict(self, payload: dict[str, Any]) -> dict[str, Any]:
         employee_id = str(payload.get("employee_id") or "").strip()
         if not employee_id:
@@ -293,21 +355,15 @@ class ShiftPredictionService:
             note=payload.get("note"),
         )
 
-    def _cached_prediction_result(self, file_hash: str, *, include_records: bool) -> PredictionResult | None:
+    def _cached_prediction_result(self, file_hash: str, *, include_records: bool) -> Optional[PredictionResult]:
         entry = self._prediction_cache.get(file_hash)
         if entry is None or not entry.output_path.exists() or not entry.clean_output_path.exists():
             return None
 
         try:
-            result_df = pd.read_csv(entry.output_path, low_memory=False)
-        except Exception:
-            logger.exception("Failed to read cached prediction output: %s", entry.output_path)
+            result_df = self._load_prediction_df(entry.output_file_name)
+        except AppError:
             return None
-
-        result_df = self._normalize_engine_result_df(result_df)
-        result_df = self._normalize_pair_validity(result_df)
-        if "prediction_mismatch_status" not in result_df or "prediction_mismatch_message" not in result_df:
-            result_df = self._add_prediction_mismatch_fields(result_df)
 
         return PredictionResult(
             file_name=entry.file_name,
@@ -327,6 +383,44 @@ class ShiftPredictionService:
             for chunk in iter(lambda: input_file.read(1024 * 1024), b""):
                 digest.update(chunk)
         return digest.hexdigest()
+
+    def _cache_prediction_df(self, output_file_name: str, result_df: pd.DataFrame) -> None:
+        cache_key = Path(output_file_name).name
+        self._prediction_df_cache[cache_key] = result_df.copy()
+
+        while len(self._prediction_df_cache) > MAX_PREDICTION_DF_CACHE_SIZE:
+            oldest_key = next(iter(self._prediction_df_cache))
+            if oldest_key == cache_key and len(self._prediction_df_cache) == 1:
+                break
+            self._prediction_df_cache.pop(oldest_key, None)
+
+    def _resolve_prediction_output_path(self, prediction_name: str) -> Path:
+        candidate_path = (settings.outputs_dir / Path(prediction_name).name).resolve()
+        outputs_dir = settings.outputs_dir.resolve()
+        if outputs_dir not in candidate_path.parents or not candidate_path.exists():
+            raise AppError("Requested prediction output was not found.", status_code=404)
+        return candidate_path
+
+    def _load_prediction_df(self, prediction_name: str) -> pd.DataFrame:
+        cache_key = Path(prediction_name).name
+        cached_df = self._prediction_df_cache.get(cache_key)
+        if cached_df is not None:
+            return cached_df.copy()
+
+        output_path = self._resolve_prediction_output_path(cache_key)
+        try:
+            result_df = pd.read_csv(output_path, low_memory=False)
+        except Exception as exc:
+            logger.exception("Failed to read prediction output: %s", output_path)
+            raise AppError("Prediction output could not be loaded.", status_code=500) from exc
+
+        result_df = self._normalize_engine_result_df(result_df)
+        result_df = self._normalize_pair_validity(result_df)
+        if "prediction_mismatch_status" not in result_df or "prediction_mismatch_message" not in result_df:
+            result_df = self._add_prediction_mismatch_fields(result_df)
+        result_df = self._reorder_output_columns(result_df)
+        self._cache_prediction_df(cache_key, result_df)
+        return result_df.copy()
 
     def _read_transaction_file(self, file_path: Path) -> pd.DataFrame:
         suffix = file_path.suffix.lower()
@@ -410,7 +504,7 @@ class ShiftPredictionService:
     def _normalize_transaction_df(
         self,
         transaction_df: pd.DataFrame,
-    ) -> tuple[pd.DataFrame, list[str], dict[str, str | None]]:
+    ) -> tuple[pd.DataFrame, list[str], dict[str, Optional[str]]]:
         detected_columns = transaction_df.columns.tolist()
         employee_column = self._find_first_matching_column(detected_columns, EMPLOYEE_ID_ALIASES)
         datetime_column = self._find_first_matching_column(detected_columns, TRANSACTION_DATETIME_ALIASES)
@@ -438,7 +532,7 @@ class ShiftPredictionService:
         }
         return normalized_df, detected_columns, mapped_columns
 
-    def _find_first_matching_column(self, detected_columns: list[str], aliases: tuple[str, ...]) -> str | None:
+    def _find_first_matching_column(self, detected_columns: list[str], aliases: tuple[str, ...]) -> Optional[str]:
         normalized_columns = {
             re.sub(r"[^a-z0-9]+", "", str(column).lower()): column
             for column in detected_columns
@@ -591,6 +685,49 @@ class ShiftPredictionService:
             "WO": int((result_df["final_shift"].astype(str).str.upper().eq("WO")).sum()) if "final_shift" in result_df else 0,
             "WO_REVIEW": int(status_counts.get("WO_REVIEW", 0)),
         }
+
+    def _filter_prediction_df(
+        self,
+        result_df: pd.DataFrame,
+        *,
+        search: str,
+        status: str,
+        shift: str,
+        mismatch: str,
+    ) -> pd.DataFrame:
+        filtered_df = result_df
+
+        if status and status != "ALL" and "final_status_label" in filtered_df.columns:
+            filtered_df = filtered_df[filtered_df["final_status_label"].astype(str) == status]
+
+        if shift and shift != "ALL" and "final_shift" in filtered_df.columns:
+            filtered_df = filtered_df[filtered_df["final_shift"].astype(str) == shift]
+
+        if mismatch and mismatch not in {"NONE", "ALL"} and "prediction_mismatch_status" in filtered_df.columns:
+            filtered_df = filtered_df[filtered_df["prediction_mismatch_status"].astype(str) == mismatch]
+
+        normalized_search = str(search or "").strip().lower()
+        if not normalized_search:
+            return filtered_df
+
+        search_mask = pd.Series(False, index=filtered_df.index)
+        searchable_df = filtered_df.fillna("")
+        for column in searchable_df.columns:
+            search_mask |= searchable_df[column].astype(str).str.lower().str.contains(normalized_search, regex=False)
+
+        return filtered_df[search_mask]
+
+    def _sorted_unique_values(self, result_df: pd.DataFrame, column: str) -> list[str]:
+        if column not in result_df.columns:
+            return []
+
+        values = (
+            result_df[column]
+            .fillna("")
+            .astype(str)
+            .map(str.strip)
+        )
+        return sorted(value for value in values.unique().tolist() if value)
 
     def _normalize_pair_validity(self, result_df: pd.DataFrame) -> pd.DataFrame:
         df = result_df.copy()
@@ -841,7 +978,7 @@ class ShiftPredictionService:
 
         return history
 
-    def _lookup_employee_history(self, employee_id: str) -> dict[str, Any] | None:
+    def _lookup_employee_history(self, employee_id: str) -> Optional[dict[str, Any]]:
         normalized_employee_id = str(employee_id).strip()
         if normalized_employee_id in self._latest_employee_history:
             return self._latest_employee_history[normalized_employee_id]
@@ -971,7 +1108,7 @@ class ShiftPredictionService:
         employee_id: str,
         attendance_day: pd.Timestamp,
         row: dict[str, Any],
-        history: dict[str, Any] | None,
+        history: Optional[dict[str, Any]],
         raw_transactions: list[str],
         note: Any,
     ) -> dict[str, Any]:
@@ -1032,7 +1169,7 @@ class ShiftPredictionService:
         pair_punch_count = self._optional_float(row.get("pair_punch_count")) or 0
         return pair_punch_count >= 2 and self._clean_shift_value(row.get("best_shift_candidate")) is not None
 
-    def _clean_shift_value(self, value: Any) -> str | None:
+    def _clean_shift_value(self, value: Any) -> Optional[str]:
         if value is None or pd.isna(value):
             return None
 
@@ -1041,7 +1178,7 @@ class ShiftPredictionService:
             return None
         return text
 
-    def _optional_float(self, value: Any) -> float | None:
+    def _optional_float(self, value: Any) -> Optional[float]:
         if value is None or pd.isna(value):
             return None
 
@@ -1050,7 +1187,7 @@ class ShiftPredictionService:
             return None
         return float(numeric_value)
 
-    def _optional_int(self, value: Any) -> int | None:
+    def _optional_int(self, value: Any) -> Optional[int]:
         numeric_value = self._optional_float(value)
         if numeric_value is None:
             return None

@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 from uuid import uuid4
 
 from fastapi import UploadFile
@@ -10,7 +12,7 @@ from backend.config import settings
 
 
 class AppError(Exception):
-    def __init__(self, message: str, status_code: int = 400, extra: dict[str, Any] | None = None):
+    def __init__(self, message: str, status_code: int = 400, extra: Optional[dict[str, Any]] = None):
         super().__init__(message)
         self.message = message
         self.status_code = status_code
@@ -31,7 +33,7 @@ class SavedUpload:
     size_bytes: int
 
 
-def get_file_extension(filename: str | None) -> str:
+def get_file_extension(filename: Optional[str]) -> str:
     if not filename:
         raise AppError("Please choose a file before running prediction.")
 
@@ -77,6 +79,6 @@ async def save_upload_file(upload: UploadFile) -> SavedUpload:
     )
 
 
-def delete_file(path: Path | None) -> None:
+def delete_file(path: Optional[Path]) -> None:
     if path and path.exists():
         path.unlink(missing_ok=True)

@@ -1,16 +1,22 @@
 const state = {
   file: null,
   rows: [],
-  filteredRows: [],
   columns: [],
   currentPage: 1,
   pageSize: 20,
+  totalPages: 1,
+  totalRows: 0,
+  filteredRowCount: 0,
   downloadUrl: "",
   debugDownloadUrl: "",
   outputFileName: "",
+  resultFileName: "",
   selectedRow: null,
   predictionTimerStartedAt: null,
   predictionTimerIntervalId: null,
+  searchDebounceId: null,
+  pageRequestAbortController: null,
+  pageRequestSequence: 0,
   manualPredictionLoading: false,
 };
 
@@ -239,10 +245,10 @@ function bindEvents() {
   dropzone.addEventListener("click", () => fileInput.click());
   fileInput.addEventListener("change", handleFileSelection);
   form.addEventListener("submit", submitPrediction);
-  searchInput.addEventListener("input", applyFilters);
-  statusFilter.addEventListener("change", applyFilters);
-  shiftFilter.addEventListener("change", applyFilters);
-  mismatchFilter.addEventListener("change", applyFilters);
+  searchInput.addEventListener("input", schedulePredictionPageRefresh);
+  statusFilter.addEventListener("change", () => refreshPredictionPage({ page: 1 }));
+  shiftFilter.addEventListener("change", () => refreshPredictionPage({ page: 1 }));
+  mismatchFilter.addEventListener("change", () => refreshPredictionPage({ page: 1 }));
   prevPage.addEventListener("click", () => changePage(-1));
   nextPage.addEventListener("click", () => changePage(1));
   tableBody.addEventListener("click", handleRowSelection);
@@ -459,6 +465,26 @@ function setSelectedFile(file) {
   hideError();
 }
 
+function resetPredictionFilters() {
+  const searchInput = getElement("searchInput");
+  const statusFilter = getElement("statusFilter");
+  const shiftFilter = getElement("shiftFilter");
+  const mismatchFilter = getElement("mismatchFilter");
+
+  if (searchInput) {
+    searchInput.value = "";
+  }
+  if (statusFilter) {
+    statusFilter.value = "ALL";
+  }
+  if (shiftFilter) {
+    shiftFilter.value = "ALL";
+  }
+  if (mismatchFilter) {
+    mismatchFilter.value = "NONE";
+  }
+}
+
 async function submitPrediction(event) {
   event.preventDefault();
   if (!appReady) {
@@ -481,6 +507,7 @@ async function submitPrediction(event) {
   setLoading(true);
   startPredictionTimer();
   hideResults();
+  cancelPendingPageRequest();
 
   try {
     const formData = new FormData();
@@ -498,23 +525,15 @@ async function submitPrediction(event) {
       return;
     }
 
-    state.rows = normalizePredictionRows(Array.isArray(payload.data) ? payload.data : []);
-    state.columns = buildAvailableColumns(Array.isArray(payload.columns) ? payload.columns : [], state.rows);
-    state.currentPage = 1;
     state.downloadUrl = payload.download_url || "";
     state.debugDownloadUrl = payload.debug_download_url || "";
     state.outputFileName = payload.output_file_name || "shift-predictions.csv";
-    state.selectedRow = state.rows[0] || null;
-
-    console.log("Shift Prediction rendered columns:", getVisibleColumns());
-    console.log("Shift Prediction first rendered row keys:", Object.keys(state.rows[0] || {}));
+    state.resultFileName = payload.output_file_name || "";
+    resetPredictionFilters();
 
     renderSummary(payload.summary || {});
     renderDownloadButton();
-    populateStatusFilter(state.rows);
-    populateShiftFilter(state.rows);
-    populateMismatchFilter(state.rows);
-    applyFilters();
+    applyPredictionPagePayload(payload, { updateFilters: true });
     showResults();
     stopPredictionTimer();
   } catch (error) {
@@ -522,6 +541,118 @@ async function submitPrediction(event) {
     stopPredictionTimer();
   } finally {
     setLoading(false);
+  }
+}
+
+function applyPredictionPagePayload(payload, { updateFilters = false } = {}) {
+  const previousSelectionKey = state.selectedRow ? buildRowSelectionKey(state.selectedRow) : "";
+
+  state.rows = normalizePredictionRows(Array.isArray(payload.data) ? payload.data : []);
+  state.columns = buildAvailableColumns(Array.isArray(payload.columns) ? payload.columns : [], state.rows);
+  state.currentPage = Number(payload.page) || 1;
+  state.pageSize = Number(payload.page_size) || state.pageSize;
+  state.totalPages = Math.max(1, Number(payload.total_pages) || 1);
+  state.totalRows = Number(payload.total_rows ?? payload.row_count ?? state.rows.length) || 0;
+  state.filteredRowCount = Number(payload.filtered_row_count ?? payload.row_count ?? state.rows.length) || 0;
+  state.resultFileName = payload.output_file_name || state.resultFileName;
+
+  if (updateFilters) {
+    const filterOptions = payload.filters || {};
+    populateStatusFilter(Array.isArray(filterOptions.statuses) ? filterOptions.statuses : []);
+    populateShiftFilter(Array.isArray(filterOptions.shifts) ? filterOptions.shifts : []);
+    populateMismatchFilter(Array.isArray(filterOptions.mismatch_states) ? filterOptions.mismatch_states : []);
+  }
+
+  state.selectedRow = state.rows.find((row) => buildRowSelectionKey(row) === previousSelectionKey) || state.rows[0] || null;
+
+  renderTable();
+  renderDetailPanel();
+}
+
+function buildRowSelectionKey(row) {
+  if (!row || typeof row !== "object") {
+    return "";
+  }
+
+  return [row.EmpCode_norm || row.EmpCode || "", row.attendance_day || ""].join("::");
+}
+
+function schedulePredictionPageRefresh() {
+  if (state.searchDebounceId !== null) {
+    window.clearTimeout(state.searchDebounceId);
+  }
+
+  state.searchDebounceId = window.setTimeout(() => {
+    state.searchDebounceId = null;
+    refreshPredictionPage({ page: 1 });
+  }, 250);
+}
+
+function cancelPendingPageRequest() {
+  if (state.searchDebounceId !== null) {
+    window.clearTimeout(state.searchDebounceId);
+    state.searchDebounceId = null;
+  }
+
+  if (state.pageRequestAbortController) {
+    state.pageRequestAbortController.abort();
+    state.pageRequestAbortController = null;
+  }
+}
+
+async function refreshPredictionPage({ page = state.currentPage } = {}) {
+  if (!appReady || !state.resultFileName) {
+    return;
+  }
+
+  const searchInput = getElement("searchInput");
+  const statusFilter = getElement("statusFilter");
+  const shiftFilter = getElement("shiftFilter");
+  const mismatchFilter = getElement("mismatchFilter");
+  if (!searchInput || !statusFilter || !shiftFilter || !mismatchFilter) {
+    return;
+  }
+
+  cancelPendingPageRequest();
+
+  const requestId = state.pageRequestSequence + 1;
+  state.pageRequestSequence = requestId;
+  const controller = new AbortController();
+  state.pageRequestAbortController = controller;
+
+  const params = new URLSearchParams({
+    page: String(page),
+    page_size: String(state.pageSize),
+    search: searchInput.value.trim(),
+    status: statusFilter.value,
+    shift: shiftFilter.value,
+    mismatch: mismatchFilter.value,
+  });
+
+  try {
+    const response = await fetch(`/api/prediction-results/${encodeURIComponent(state.resultFileName)}?${params.toString()}`, {
+      signal: controller.signal,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (requestId !== state.pageRequestSequence) {
+      return;
+    }
+    if (!response.ok) {
+      showError(payload);
+      return;
+    }
+
+    hideError();
+    applyPredictionPagePayload(payload, { updateFilters: true });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      return;
+    }
+    showError(error);
+  } finally {
+    if (state.pageRequestAbortController === controller) {
+      state.pageRequestAbortController = null;
+    }
   }
 }
 
@@ -593,20 +724,13 @@ function fileNameFromDownloadUrl(url, fallbackName) {
   return fileName || fallbackName;
 }
 
-function populateStatusFilter(rows) {
+function populateStatusFilter(statuses) {
   const statusFilter = getElement("statusFilter");
   if (!statusFilter) {
     return;
   }
 
   const currentValue = statusFilter.value;
-  const statuses = Array.from(
-    new Set(
-      rows
-        .map((row) => row.final_status_label)
-        .filter((value) => value !== null && value !== undefined && value !== ""),
-    ),
-  ).sort();
 
   statusFilter.innerHTML = [
     '<option value="ALL">All statuses</option>',
@@ -618,20 +742,13 @@ function populateStatusFilter(rows) {
   }
 }
 
-function populateShiftFilter(rows) {
+function populateShiftFilter(shifts) {
   const shiftFilter = getElement("shiftFilter");
   if (!shiftFilter) {
     return;
   }
 
   const currentValue = shiftFilter.value;
-  const shifts = Array.from(
-    new Set(
-      rows
-        .map((row) => row.final_shift)
-        .filter((value) => value !== null && value !== undefined && value !== ""),
-    ),
-  ).sort();
 
   shiftFilter.innerHTML = [
     '<option value="ALL">All shifts</option>',
@@ -643,20 +760,13 @@ function populateShiftFilter(rows) {
   }
 }
 
-function populateMismatchFilter(rows) {
+function populateMismatchFilter(mismatchStates) {
   const mismatchFilter = getElement("mismatchFilter");
   if (!mismatchFilter) {
     return;
   }
 
   const currentValue = mismatchFilter.value;
-  const mismatchStates = Array.from(
-    new Set(
-      rows
-        .map((row) => row.prediction_mismatch_status)
-        .filter((value) => value !== null && value !== undefined && value !== ""),
-    ),
-  ).sort();
 
   mismatchFilter.innerHTML = [
     '<option value="NONE">None</option>',
@@ -667,54 +777,6 @@ function populateMismatchFilter(rows) {
   if (currentValue === "NONE" || currentValue === "ALL" || mismatchStates.includes(currentValue)) {
     mismatchFilter.value = currentValue;
   }
-}
-
-function applyFilters() {
-  if (!appReady) {
-    return;
-  }
-
-  const searchInput = getElement("searchInput");
-  const statusFilter = getElement("statusFilter");
-  const shiftFilter = getElement("shiftFilter");
-  const mismatchFilter = getElement("mismatchFilter");
-  if (!searchInput || !statusFilter || !shiftFilter || !mismatchFilter) {
-    return;
-  }
-
-  const searchTerm = searchInput.value.trim().toLowerCase();
-  const status = statusFilter.value;
-  const shift = shiftFilter.value;
-  const mismatch = mismatchFilter.value;
-
-  state.filteredRows = state.rows.filter((row) => {
-    const matchesStatus = status === "ALL" || row.final_status_label === status;
-    const matchesShift = shift === "ALL" || row.final_shift === shift;
-    const matchesMismatch = mismatch === "NONE" || mismatch === "ALL" || row.prediction_mismatch_status === mismatch;
-    if (!matchesStatus || !matchesShift || !matchesMismatch) {
-      return false;
-    }
-
-    if (!searchTerm) {
-      return true;
-    }
-
-    return Object.values(row).some((value) =>
-      String(value ?? "").toLowerCase().includes(searchTerm),
-    );
-  });
-
-  if (state.selectedRow && !state.filteredRows.includes(state.selectedRow)) {
-    state.selectedRow = state.filteredRows[0] || null;
-  }
-
-  if (!state.selectedRow && state.filteredRows.length > 0) {
-    state.selectedRow = state.filteredRows[0];
-  }
-
-  state.currentPage = 1;
-  renderTable();
-  renderDetailPanel();
 }
 
 function getVisibleColumns() {
@@ -741,11 +803,9 @@ function renderTable() {
   }
 
   const visibleColumns = getVisibleColumns();
-  const totalPages = Math.max(1, Math.ceil(state.filteredRows.length / state.pageSize));
+  const totalPages = Math.max(1, state.totalPages);
   state.currentPage = Math.min(state.currentPage, totalPages);
-
-  const startIndex = (state.currentPage - 1) * state.pageSize;
-  const pageRows = state.filteredRows.slice(startIndex, startIndex + state.pageSize);
+  const pageRows = state.rows;
 
   tableHead.innerHTML = `
     <tr>
@@ -757,7 +817,7 @@ function renderTable() {
     .map((row, index) => {
       const selectedClass = row === state.selectedRow ? "is-selected" : "";
       return `
-        <tr class="${selectedClass}" data-row-index="${startIndex + index}" tabindex="0" aria-selected="${row === state.selectedRow}">
+        <tr class="${selectedClass}" data-row-index="${index}" tabindex="0" aria-selected="${row === state.selectedRow}">
           ${visibleColumns.map((column) => `<td class="${getColumnClass(column)}">${formatCell(row[column], column, row)}</td>`).join("")}
         </tr>
       `;
@@ -765,7 +825,7 @@ function renderTable() {
     .join("");
 
   emptyState.hidden = pageRows.length > 0;
-  setElementText("resultCount", `${state.filteredRows.length} row${state.filteredRows.length === 1 ? "" : "s"}`);
+  setElementText("resultCount", `${state.filteredRowCount} row${state.filteredRowCount === 1 ? "" : "s"}`);
   setElementText("pageIndicator", `Page ${state.currentPage} of ${totalPages}`);
   prevPage.disabled = state.currentPage <= 1;
   nextPage.disabled = state.currentPage >= totalPages;
@@ -778,7 +838,7 @@ function handleRowSelection(event) {
   }
 
   const rowIndex = Number(rowElement.dataset.rowIndex);
-  const row = state.filteredRows[rowIndex];
+  const row = state.rows[rowIndex];
   if (!row) {
     return;
   }
@@ -907,14 +967,13 @@ function changePage(direction) {
     return;
   }
 
-  const totalPages = Math.max(1, Math.ceil(state.filteredRows.length / state.pageSize));
+  const totalPages = Math.max(1, state.totalPages);
   const nextPage = state.currentPage + direction;
   if (nextPage < 1 || nextPage > totalPages) {
     return;
   }
 
-  state.currentPage = nextPage;
-  renderTable();
+  refreshPredictionPage({ page: nextPage });
 }
 
 function setLoading(isLoading) {

@@ -2,8 +2,9 @@ import logging
 from pathlib import Path
 from time import perf_counter
 
-from fastapi import FastAPI, File, Request, UploadFile
+from fastapi import FastAPI, File, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
@@ -16,6 +17,8 @@ from backend.schemas import (
     ManualPredictRequest,
     ManualPredictResponse,
     PredictResponse,
+    PredictionFilterOptions,
+    PredictionPageResponse,
 )
 from backend.services.file_service import AppError, delete_file, save_upload_file
 from backend.services.comparison_service import comparison_service
@@ -38,6 +41,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 @app.on_event("startup")
 def startup_event() -> None:
@@ -97,10 +101,22 @@ async def predict(file: UploadFile = File(...)) -> PredictResponse:
             shift_prediction_service.predict,
             file_path=saved_upload.path,
             original_name=saved_upload.original_name,
+            include_records=False,
             use_cache=True,
         )
     finally:
         delete_file(saved_upload.path)
+
+    page_result = await run_in_threadpool(
+        shift_prediction_service.get_prediction_page,
+        prediction_result.output_file_name,
+        page=1,
+        page_size=20,
+        search="",
+        status="ALL",
+        shift="ALL",
+        mismatch="NONE",
+    )
 
     return PredictResponse(
         file_name=prediction_result.file_name,
@@ -108,10 +124,57 @@ async def predict(file: UploadFile = File(...)) -> PredictResponse:
         generated_at=prediction_result.generated_at,
         summary=prediction_result.summary,
         row_count=prediction_result.summary["total_rows"],
-        columns=prediction_result.columns,
+        columns=page_result.columns,
+        page=page_result.page,
+        page_size=page_result.page_size,
+        total_pages=page_result.total_pages,
+        filtered_row_count=page_result.filtered_row_count,
+        filters=PredictionFilterOptions(
+            statuses=page_result.available_statuses,
+            shifts=page_result.available_shifts,
+            mismatch_states=page_result.available_mismatch_states,
+        ),
         download_url=f"/api/download/{prediction_result.clean_output_file_name}",
         debug_download_url=f"/api/download/{prediction_result.output_file_name}",
-        data=prediction_result.records,
+        data=page_result.records,
+    )
+
+
+@app.get("/api/prediction-results/{file_name}", response_model=PredictionPageResponse)
+async def prediction_results(
+    file_name: str,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=200),
+    search: str = Query(default=""),
+    status: str = Query(default="ALL"),
+    shift: str = Query(default="ALL"),
+    mismatch: str = Query(default="NONE"),
+) -> PredictionPageResponse:
+    page_result = await run_in_threadpool(
+        shift_prediction_service.get_prediction_page,
+        file_name,
+        page=page,
+        page_size=page_size,
+        search=search,
+        status=status,
+        shift=shift,
+        mismatch=mismatch,
+    )
+
+    return PredictionPageResponse(
+        output_file_name=page_result.output_file_name,
+        columns=page_result.columns,
+        page=page_result.page,
+        page_size=page_result.page_size,
+        total_pages=page_result.total_pages,
+        total_rows=page_result.total_rows,
+        filtered_row_count=page_result.filtered_row_count,
+        filters=PredictionFilterOptions(
+            statuses=page_result.available_statuses,
+            shifts=page_result.available_shifts,
+            mismatch_states=page_result.available_mismatch_states,
+        ),
+        data=page_result.records,
     )
 
 

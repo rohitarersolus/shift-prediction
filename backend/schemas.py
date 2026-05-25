@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -26,6 +28,24 @@ class PredictionSummary(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class PredictionFilterOptions(BaseModel):
+    statuses: list[str]
+    shifts: list[str]
+    mismatch_states: list[str]
+
+
+class PredictionPageResponse(BaseModel):
+    output_file_name: str
+    columns: list[str]
+    page: int
+    page_size: int
+    total_pages: int
+    total_rows: int
+    filtered_row_count: int
+    filters: PredictionFilterOptions
+    data: list[dict[str, Any]]
+
+
 class PredictResponse(BaseModel):
     file_name: str
     output_file_name: str
@@ -33,8 +53,13 @@ class PredictResponse(BaseModel):
     summary: PredictionSummary
     row_count: int
     columns: list[str]
+    page: int
+    page_size: int
+    total_pages: int
+    filtered_row_count: int
+    filters: PredictionFilterOptions
     download_url: str
-    debug_download_url: str | None = None
+    debug_download_url: Optional[str] = None
     data: list[dict[str, Any]]
 
 
@@ -43,26 +68,26 @@ class ManualPredictRequest(BaseModel):
     date: str
     punch_in: str
     punch_out: str
-    extra_punches: list[str] | str | None = None
-    note: str | None = None
+    extra_punches: Optional[Union[list[str], str]] = None
+    note: Optional[str] = None
 
 
 class ManualPredictResponse(BaseModel):
     employee_id: str
     date: str
-    model_predicted_shift: str | None
-    model_confidence: float | None
+    model_predicted_shift: Optional[str]
+    model_confidence: Optional[float]
     historical_regular_shift: str
-    history_confidence: float | None = None
-    history_consistency: str | None = None
-    history_support: int | None = None
-    history_source: str | None = None
+    history_confidence: Optional[float] = None
+    history_consistency: Optional[str] = None
+    history_support: Optional[int] = None
+    history_source: Optional[str] = None
     final_recommended_shift: str
     status: str
     message: str
     raw_transactions_used: list[str]
     raw_transactions_text: str
-    note: str | None = None
+    note: Optional[str] = None
     engine_row: dict[str, Any]
 
 
@@ -92,11 +117,11 @@ class CompareResponse(BaseModel):
     row_count: int
     columns: list[str]
     download_url: str
-    debug_download_url: str | None = None
+    debug_download_url: Optional[str] = None
     data: list[dict[str, Any]]
 
 
 class ErrorResponse(BaseModel):
     detail: str
-    detected_columns: list[str] | None = None
-    supported_aliases: dict[str, list[str]] | None = None
+    detected_columns: Optional[list[str]] = None
+    supported_aliases: Optional[dict[str, list[str]]] = None

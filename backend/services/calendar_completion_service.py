@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional
 
 import pandas as pd
 
@@ -31,7 +31,7 @@ class HolidayProvider:
 
 
 class CalendarCompletionService:
-    def __init__(self, holiday_provider: HolidayProvider | None = None) -> None:
+    def __init__(self, holiday_provider: Optional[HolidayProvider] = None) -> None:
         self.holiday_provider = holiday_provider or HolidayProvider()
 
     def complete(self, transaction_df: pd.DataFrame, prediction_df: pd.DataFrame) -> pd.DataFrame:
@@ -54,7 +54,7 @@ class CalendarCompletionService:
 
         return self.merge_predictions_and_generated(prediction_df, generated_df, employee_column, date_column)
 
-    def detect_date_range(self, transaction_df: pd.DataFrame) -> DateRange | None:
+    def detect_date_range(self, transaction_df: pd.DataFrame) -> Optional[DateRange]:
         if "TransactionDateTime" not in transaction_df:
             return None
 
@@ -214,7 +214,7 @@ class CalendarCompletionService:
             columns.append("candidate_punch_slice")
         return columns
 
-    def _find_column(self, columns: Iterable[str], candidates: tuple[str, ...]) -> str | None:
+    def _find_column(self, columns: Iterable[str], candidates: tuple[str, ...]) -> Optional[str]:
         column_set = set(columns)
         for candidate in candidates:
             if candidate in column_set:

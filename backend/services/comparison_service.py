@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import logging
 import re
@@ -5,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
-from typing import Any
+from typing import Any, Optional, Union
 
 import pandas as pd
 import numpy as np
@@ -109,7 +111,7 @@ class ComparisonResult:
     clean_output_file_name: str
     clean_output_path: Path
     generated_at: datetime
-    summary: dict[str, float | int]
+    summary: dict[str, Union[float, int]]
     columns: list[str]
     records: list[dict[str, Any]]
 
@@ -119,8 +121,8 @@ class ComparisonService:
         self,
         attendance_path: Path,
         attendance_name: str,
-        prediction_path: Path | None = None,
-        prediction_name: str | None = None,
+        prediction_path: Optional[Path] = None,
+        prediction_name: Optional[str] = None,
     ) -> ComparisonResult:
         total_started = perf_counter()
         timings: dict[str, float] = {}
@@ -192,7 +194,7 @@ class ComparisonService:
             records=records,
         )
 
-    def _resolve_prediction_output(self, prediction_name: str | None) -> Path:
+    def _resolve_prediction_output(self, prediction_name: Optional[str]) -> Path:
         outputs_dir = settings.outputs_dir.resolve()
 
         if prediction_name:
@@ -251,7 +253,7 @@ class ComparisonService:
 
         return df
 
-    def _has_required_columns(self, columns: list[str] | pd.Index) -> bool:
+    def _has_required_columns(self, columns: Union[list[str], pd.Index]) -> bool:
         return (
             self._find_column(columns, EMPLOYEE_ALIASES) is not None
             and (
@@ -336,7 +338,7 @@ class ComparisonService:
         rows["attendance_status_category"] = self._attendance_status_category_series(rows)
         return self._dedupe_keyed_rows(rows)
 
-    def _attendance_status_series(self, df: pd.DataFrame, status_col: str | None) -> pd.Series:
+    def _attendance_status_series(self, df: pd.DataFrame, status_col: Optional[str]) -> pd.Series:
         if status_col and status_col in {"FHStatus", "SHStatus"}:
             fh_col = self._find_column(df.columns, ("FHStatus",))
             sh_col = self._find_column(df.columns, ("SHStatus",))
@@ -488,7 +490,7 @@ class ComparisonService:
 
         return "SHIFT", "SHIFT_MISMATCH", "prediction does not match attendance answer key"
 
-    def _build_summary(self, comparison_df: pd.DataFrame) -> dict[str, float | int]:
+    def _build_summary(self, comparison_df: pd.DataFrame) -> dict[str, Union[float, int]]:
         attendance_total_rows = int(comparison_df["comparison_result"].ne("MISSING_IN_ATTENDANCE").sum())
         prediction_total_rows = int(comparison_df["comparison_result"].ne("MISSING_IN_PREDICTION").sum())
         missing_in_prediction = int(comparison_df["comparison_result"].eq("MISSING_IN_PREDICTION").sum())
@@ -582,8 +584,8 @@ class ComparisonService:
     def _build_punch_series(
         self,
         df: pd.DataFrame,
-        direct_column: str | None,
-        source_column: str | None,
+        direct_column: Optional[str],
+        source_column: Optional[str],
         side: str,
     ) -> pd.Series:
         if direct_column:
@@ -642,7 +644,7 @@ class ComparisonService:
             raise AppError(f"Missing required {label} column.")
         return column
 
-    def _find_column(self, columns: list[str] | pd.Index, aliases: tuple[str, ...]) -> str | None:
+    def _find_column(self, columns: Union[list[str], pd.Index], aliases: tuple[str, ...]) -> Optional[str]:
         normalized_columns: dict[str, str] = {}
         for column in columns:
             normalized_column = self._normalize_column_name(column)
