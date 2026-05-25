@@ -2,15 +2,19 @@ const comparisonState = {
   transactionFile: null,
   attendanceFile: null,
   rows: [],
-  filteredRows: [],
   columns: [],
   currentPage: 1,
+  totalPages: 1,
+  filteredRowCount: 0,
   pageSize: 25,
   downloadUrl: "",
   debugDownloadUrl: "",
   outputFileName: "",
   timerStartedAt: null,
   timerIntervalId: null,
+  searchDebounceId: null,
+  pageRequestAbortController: null,
+  pageRequestSequence: 0,
 };
 
 const comparisonElements = {
@@ -148,8 +152,8 @@ function initializeComparisonPage() {
   comparisonElements.transactionFileInput.addEventListener("change", handleTransactionSelection);
   comparisonElements.attendanceFileInput.addEventListener("change", handleAttendanceSelection);
   comparisonElements.form.addEventListener("submit", submitComparison);
-  comparisonElements.searchInput.addEventListener("input", applyComparisonFilters);
-  comparisonElements.resultFilter.addEventListener("change", applyComparisonFilters);
+  comparisonElements.searchInput.addEventListener("input", scheduleComparisonPageRefresh);
+  comparisonElements.resultFilter.addEventListener("change", () => refreshComparisonPage({ page: 1 }));
   comparisonElements.prevPage.addEventListener("click", () => changeComparisonPage(-1));
   comparisonElements.nextPage.addEventListener("click", () => changeComparisonPage(1));
 }
@@ -182,6 +186,7 @@ async function submitComparison(event) {
     return;
   }
 
+  cancelPendingComparisonPageRequest();
   setComparisonLoading(true);
   startComparisonTimer();
   comparisonElements.resultsSection.hidden = true;
@@ -202,17 +207,13 @@ async function submitComparison(event) {
       return;
     }
 
-    comparisonState.rows = Array.isArray(payload.data) ? payload.data : [];
-    comparisonState.columns = Array.isArray(payload.columns) ? payload.columns : comparisonColumns;
-    comparisonState.currentPage = 1;
     comparisonState.downloadUrl = payload.download_url || "";
     comparisonState.debugDownloadUrl = payload.debug_download_url || "";
     comparisonState.outputFileName = payload.output_file_name || "comparison.csv";
 
     renderComparisonSummary(payload.summary || {});
-    populateComparisonResultFilter(comparisonState.rows);
     renderComparisonDownload();
-    applyComparisonFilters();
+    applyComparisonPayload(payload, { updateFilters: true });
     comparisonElements.resultsSection.hidden = false;
     stopComparisonTimer();
   } catch (error) {
@@ -221,6 +222,31 @@ async function submitComparison(event) {
   } finally {
     setComparisonLoading(false);
   }
+}
+
+function applyComparisonPayload(payload, { updateFilters = false } = {}) {
+  comparisonState.rows = Array.isArray(payload.data) ? payload.data : [];
+  comparisonState.columns = Array.isArray(payload.columns) ? payload.columns : comparisonColumns;
+  comparisonState.outputFileName = payload.output_file_name || comparisonState.outputFileName;
+
+  const currentPage = Number(payload.page);
+  comparisonState.currentPage = Number.isFinite(currentPage) && currentPage > 0 ? currentPage : 1;
+
+  const pageSize = Number(payload.page_size);
+  comparisonState.pageSize = Number.isFinite(pageSize) && pageSize > 0 ? pageSize : comparisonState.pageSize;
+
+  const totalPages = Number(payload.total_pages);
+  comparisonState.totalPages = Number.isFinite(totalPages) && totalPages > 0 ? totalPages : 1;
+
+  const filteredRowCount = Number(payload.filtered_row_count);
+  comparisonState.filteredRowCount = Number.isFinite(filteredRowCount) ? filteredRowCount : comparisonState.rows.length;
+
+  if (updateFilters) {
+    const filterOptions = payload.filters || {};
+    populateComparisonResultFilter(Array.isArray(filterOptions.results) ? filterOptions.results : []);
+  }
+
+  renderComparisonTable();
 }
 
 function renderComparisonSummary(summary) {
@@ -241,17 +267,14 @@ function renderComparisonSummary(summary) {
     .join("");
 }
 
-function populateComparisonResultFilter(rows) {
+function populateComparisonResultFilter(results) {
   const currentValue = comparisonElements.resultFilter.value;
-  const results = Array.from(new Set(rows.map((row) => row.comparison_result).filter(Boolean))).sort();
   comparisonElements.resultFilter.innerHTML = [
     '<option value="ALL">All results</option>',
     ...results.map((result) => `<option value="${escapeHtml(result)}">${escapeHtml(result)}</option>`),
   ].join("");
 
-  if (results.includes(currentValue)) {
-    comparisonElements.resultFilter.value = currentValue;
-  }
+  comparisonElements.resultFilter.value = results.includes(currentValue) ? currentValue : "ALL";
 }
 
 function renderComparisonDownload() {
@@ -293,33 +316,77 @@ function fileNameFromDownloadUrl(url, fallbackName) {
   return fileName || fallbackName;
 }
 
-function applyComparisonFilters() {
-  const searchTerm = comparisonElements.searchInput.value.trim().toLowerCase();
-  const resultFilter = comparisonElements.resultFilter.value;
+function scheduleComparisonPageRefresh() {
+  if (comparisonState.searchDebounceId !== null) {
+    window.clearTimeout(comparisonState.searchDebounceId);
+  }
 
-  comparisonState.filteredRows = comparisonState.rows.filter((row) => {
-    if (resultFilter !== "ALL" && row.comparison_result !== resultFilter) {
-      return false;
-    }
-    if (!searchTerm) {
-      return true;
-    }
+  comparisonState.searchDebounceId = window.setTimeout(() => {
+    comparisonState.searchDebounceId = null;
+    refreshComparisonPage({ page: 1 });
+  }, 250);
+}
 
-    return Object.values(row).some((value) =>
-      String(value ?? "").toLowerCase().includes(searchTerm),
-    );
+function cancelPendingComparisonPageRequest() {
+  if (comparisonState.searchDebounceId !== null) {
+    window.clearTimeout(comparisonState.searchDebounceId);
+    comparisonState.searchDebounceId = null;
+  }
+
+  if (comparisonState.pageRequestAbortController) {
+    comparisonState.pageRequestAbortController.abort();
+    comparisonState.pageRequestAbortController = null;
+  }
+}
+
+async function refreshComparisonPage({ page = comparisonState.currentPage } = {}) {
+  if (!comparisonState.outputFileName) {
+    return;
+  }
+
+  cancelPendingComparisonPageRequest();
+
+  const requestId = comparisonState.pageRequestSequence + 1;
+  comparisonState.pageRequestSequence = requestId;
+  const controller = new AbortController();
+  comparisonState.pageRequestAbortController = controller;
+
+  const params = new URLSearchParams({
+    page: String(page),
+    page_size: String(comparisonState.pageSize),
+    search: comparisonElements.searchInput.value.trim(),
+    result: comparisonElements.resultFilter.value,
   });
 
-  comparisonState.currentPage = 1;
-  renderComparisonTable();
+  try {
+    const response = await fetch(`/api/comparison-results/${encodeURIComponent(comparisonState.outputFileName)}?${params.toString()}`, {
+      signal: controller.signal,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (requestId !== comparisonState.pageRequestSequence) {
+      return;
+    }
+    if (!response.ok) {
+      showComparisonError(payload.detail || "Comparison results could not be loaded.");
+      return;
+    }
+
+    hideComparisonError();
+    applyComparisonPayload(payload, { updateFilters: true });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      return;
+    }
+    showComparisonError(error instanceof Error ? error.message : "Comparison results could not be loaded.");
+  } finally {
+    if (comparisonState.pageRequestAbortController === controller) {
+      comparisonState.pageRequestAbortController = null;
+    }
+  }
 }
 
 function renderComparisonTable() {
   const visibleColumns = comparisonColumns.filter((column) => comparisonState.columns.includes(column));
-  const totalPages = Math.max(1, Math.ceil(comparisonState.filteredRows.length / comparisonState.pageSize));
-  comparisonState.currentPage = Math.min(comparisonState.currentPage, totalPages);
-  const startIndex = (comparisonState.currentPage - 1) * comparisonState.pageSize;
-  const pageRows = comparisonState.filteredRows.slice(startIndex, startIndex + comparisonState.pageSize);
 
   comparisonElements.tableHead.innerHTML = `
     <tr>
@@ -327,7 +394,7 @@ function renderComparisonTable() {
     </tr>
   `;
 
-  comparisonElements.tableBody.innerHTML = pageRows
+  comparisonElements.tableBody.innerHTML = comparisonState.rows
     .map((row) => `
       <tr class="result-${String(row.comparison_result || "").toLowerCase()}">
         ${visibleColumns.map((column) => `<td class="${getColumnClass(column)}">${formatComparisonCell(row[column], column)}</td>`).join("")}
@@ -335,22 +402,20 @@ function renderComparisonTable() {
     `)
     .join("");
 
-  comparisonElements.emptyState.hidden = pageRows.length > 0;
-  comparisonElements.resultCount.textContent = `${comparisonState.filteredRows.length} row${comparisonState.filteredRows.length === 1 ? "" : "s"}`;
-  comparisonElements.pageIndicator.textContent = `Page ${comparisonState.currentPage} of ${totalPages}`;
+  comparisonElements.emptyState.hidden = comparisonState.rows.length > 0;
+  comparisonElements.resultCount.textContent = `${comparisonState.filteredRowCount} row${comparisonState.filteredRowCount === 1 ? "" : "s"}`;
+  comparisonElements.pageIndicator.textContent = `Page ${comparisonState.currentPage} of ${comparisonState.totalPages}`;
   comparisonElements.prevPage.disabled = comparisonState.currentPage <= 1;
-  comparisonElements.nextPage.disabled = comparisonState.currentPage >= totalPages;
+  comparisonElements.nextPage.disabled = comparisonState.currentPage >= comparisonState.totalPages;
 }
 
 function changeComparisonPage(direction) {
-  const totalPages = Math.max(1, Math.ceil(comparisonState.filteredRows.length / comparisonState.pageSize));
   const nextPage = comparisonState.currentPage + direction;
-  if (nextPage < 1 || nextPage > totalPages) {
+  if (nextPage < 1 || nextPage > comparisonState.totalPages) {
     return;
   }
 
-  comparisonState.currentPage = nextPage;
-  renderComparisonTable();
+  refreshComparisonPage({ page: nextPage });
 }
 
 function formatComparisonCell(value, column) {

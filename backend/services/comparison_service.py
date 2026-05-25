@@ -91,6 +91,24 @@ BASE_SHIFT_CODES = {"KFS", "KSS", "PF", "PGM", "PS", "PT"}
 SUPPORTED_WORKING_SHIFT_CODES = {"PF", "PGM", "PS", "PT"}
 NON_WORKING_SHIFT_CODES = {"WO", "OFF", "HOLIDAY", "LEAVE", "ABSENT"}
 logger = logging.getLogger("shift_prediction")
+MAX_COMPARISON_DF_CACHE_SIZE = 3
+COMPARISON_SEARCH_COLUMNS = (
+    "employee_id",
+    "date",
+    "attendance_punch_in_time",
+    "attendance_punch_out_time",
+    "transaction_first_in_time",
+    "transaction_last_out_time",
+    "attendance_truth_shift_family",
+    "predicted_final_shift",
+    "predicted_final_status_label",
+    "predicted_final_day_status",
+    "attendance_truth_shift",
+    "attendance_truth_status",
+    "comparison_layer",
+    "comparison_result",
+    "mismatch_reason",
+)
 ATTENDANCE_SHIFT_FAMILY_MAP = {
     "PFW": "PF",
     "PF": "PF",
@@ -116,13 +134,30 @@ class ComparisonResult:
     records: list[dict[str, Any]]
 
 
+@dataclass
+class ComparisonPageResult:
+    output_file_name: str
+    columns: list[str]
+    page: int
+    page_size: int
+    total_pages: int
+    total_rows: int
+    filtered_row_count: int
+    available_results: list[str]
+    records: list[dict[str, Any]]
+
+
 class ComparisonService:
+    def __init__(self) -> None:
+        self._comparison_df_cache: dict[str, pd.DataFrame] = {}
+
     def compare(
         self,
         attendance_path: Path,
         attendance_name: str,
         prediction_path: Optional[Path] = None,
         prediction_name: Optional[str] = None,
+        include_records: bool = True,
     ) -> ComparisonResult:
         total_started = perf_counter()
         timings: dict[str, float] = {}
@@ -164,8 +199,10 @@ class ComparisonService:
         clean_output_path = self._write_clean_output_csv(comparison_df, prediction_name or "prediction", attendance_name)
         timings["csv_generation"] = perf_counter() - started
 
+        self._cache_comparison_df(output_path.name, comparison_df)
+
         started = perf_counter()
-        records = self._to_records(comparison_df)
+        records = self._to_records(comparison_df) if include_records else []
         timings["response_serialization"] = perf_counter() - started
         timings["total"] = perf_counter() - total_started
 
@@ -194,6 +231,42 @@ class ComparisonService:
             records=records,
         )
 
+    def get_comparison_page(
+        self,
+        comparison_name: str,
+        *,
+        page: int = 1,
+        page_size: int = 25,
+        search: str = "",
+        result: str = "ALL",
+    ) -> ComparisonPageResult:
+        comparison_df = self._load_comparison_df(comparison_name)
+        filtered_df = self._filter_comparison_df(
+            comparison_df,
+            search=search,
+            result=result,
+        )
+
+        safe_page_size = max(1, min(page_size, 200))
+        filtered_row_count = int(len(filtered_df))
+        total_rows = int(len(comparison_df))
+        total_pages = max(1, (filtered_row_count + safe_page_size - 1) // safe_page_size)
+        safe_page = max(1, min(page, total_pages))
+        start_index = (safe_page - 1) * safe_page_size
+        page_df = filtered_df.iloc[start_index : start_index + safe_page_size].copy()
+
+        return ComparisonPageResult(
+            output_file_name=Path(comparison_name).name,
+            columns=comparison_df.columns.tolist(),
+            page=safe_page,
+            page_size=safe_page_size,
+            total_pages=total_pages,
+            total_rows=total_rows,
+            filtered_row_count=filtered_row_count,
+            available_results=self._sorted_unique_values(comparison_df, "comparison_result"),
+            records=self._to_records(page_df),
+        )
+
     def _resolve_prediction_output(self, prediction_name: Optional[str]) -> Path:
         outputs_dir = settings.outputs_dir.resolve()
 
@@ -217,6 +290,71 @@ class ComparisonService:
             raise AppError("No prediction output is available. Run prediction first or upload a prediction CSV.")
 
         return prediction_outputs[0].resolve()
+
+    def _cache_comparison_df(self, output_file_name: str, comparison_df: pd.DataFrame) -> None:
+        cache_key = Path(output_file_name).name
+        self._comparison_df_cache[cache_key] = comparison_df.copy()
+
+        while len(self._comparison_df_cache) > MAX_COMPARISON_DF_CACHE_SIZE:
+            oldest_key = next(iter(self._comparison_df_cache))
+            if oldest_key == cache_key and len(self._comparison_df_cache) == 1:
+                break
+            self._comparison_df_cache.pop(oldest_key, None)
+
+    def _resolve_comparison_output_path(self, comparison_name: str) -> Path:
+        candidate_path = (settings.outputs_dir / Path(comparison_name).name).resolve()
+        outputs_dir = settings.outputs_dir.resolve()
+
+        if (
+            outputs_dir not in candidate_path.parents
+            or not candidate_path.exists()
+            or not candidate_path.name.startswith("comparison-")
+        ):
+            raise AppError("Requested comparison output was not found.", status_code=404)
+
+        return candidate_path
+
+    def _load_comparison_df(self, comparison_name: str) -> pd.DataFrame:
+        cache_key = Path(comparison_name).name
+        cached_df = self._comparison_df_cache.get(cache_key)
+        if cached_df is not None:
+            return cached_df.copy()
+
+        output_path = self._resolve_comparison_output_path(cache_key)
+        try:
+            comparison_df = pd.read_csv(output_path, low_memory=False)
+        except Exception as exc:
+            logger.exception("Failed to read comparison output: %s", output_path)
+            raise AppError("Comparison output could not be loaded.", status_code=500) from exc
+
+        self._cache_comparison_df(cache_key, comparison_df)
+        return comparison_df.copy()
+
+    def _filter_comparison_df(
+        self,
+        comparison_df: pd.DataFrame,
+        *,
+        search: str = "",
+        result: str = "ALL",
+    ) -> pd.DataFrame:
+        filtered_df = comparison_df
+
+        if result and result != "ALL" and "comparison_result" in filtered_df.columns:
+            filtered_df = filtered_df[filtered_df["comparison_result"].fillna("").astype(str) == result]
+
+        search_text = search.strip().lower()
+        if not search_text:
+            return filtered_df
+
+        searchable_columns = [column for column in COMPARISON_SEARCH_COLUMNS if column in filtered_df.columns]
+        if not searchable_columns:
+            return filtered_df
+
+        mask = pd.Series(False, index=filtered_df.index)
+        for column in searchable_columns:
+            mask = mask | filtered_df[column].fillna("").astype(str).str.lower().str.contains(search_text, regex=False)
+
+        return filtered_df[mask]
 
     def _read_table(self, path: Path) -> pd.DataFrame:
         suffix = path.suffix.lower()
@@ -865,6 +1003,14 @@ class ComparisonService:
 
     def _safe_stem(self, name: str, fallback: str) -> str:
         return re.sub(r"[^A-Za-z0-9._-]+", "-", Path(name).stem).strip("-") or fallback
+
+    def _sorted_unique_values(self, df: pd.DataFrame, column: str) -> list[str]:
+        if column not in df.columns:
+            return []
+
+        values = df[column].fillna("").astype(str).str.strip()
+        unique_values = {value for value in values if value}
+        return sorted(unique_values)
 
     def _to_records(self, df: pd.DataFrame) -> list[dict[str, Any]]:
         return json.loads(df.to_json(orient="records", date_format="iso"))

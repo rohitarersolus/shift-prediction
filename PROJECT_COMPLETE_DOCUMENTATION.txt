@@ -1,24 +1,24 @@
 SHIFT PREDICTION PROJECT - COMPLETE PROJECT DOCUMENTATION
-Generated on: 2026-04-30
-Project root: /Users/devappsolus/Documents/AMS/shift-prediction
+Generated on: 2026-05-25
+Project root: /Users/devappsolus/Documents/data/AMS/shift-prediction
 
 V3 UPDATE NOTE:
-The active website engine has been switched to `shift_engine_package_v3_fixed_reader/`.
-The active production logic is fixed ReaderNumber based:
+The active website engine has been switched to `shift_engine_package_v3_day_first_reader/`.
+The active production logic is day-first ReaderNumber based:
 - ReaderNumber = 1 is Punch In.
 - ReaderNumber = 2 is Punch Out.
 - Punch In is the earliest same-day ReaderNumber 1.
-- Punch Out is the latest ReaderNumber 2 after Punch In within the 36-hour window.
+- Punch Out first uses the latest same-day ReaderNumber 2 after Punch In, then falls back to later windows when needed.
 - Required upload columns are EmpCode, TransactionDateTime, and ReaderNumber.
 - The V3 engine creates the employee-date calendar itself and marks no same-day transaction as ABSENT.
 - The backend must not add duplicate calendar completion rows for V3 output.
-- The old `shift_engine_package/` and `shift_engine_package_v2_reader_based/` folders remain in the project only as backups.
+- The old `shift_engine_package/`, `shift_engine_package_v2_reader_based/`, and `shift_engine_package_v3_fixed_reader/` folders remain in the project only as backups.
 
 ============================================================
 1. PROJECT PURPOSE
 ============================================================
 
-This project is a local web application for predicting employee shifts from raw attendance transaction punch data.
+This project is a web application for predicting employee shifts from raw attendance transaction punch data. It can be run locally for development and is also deployed on Render for hosted use.
 
 The main goal is:
 - Upload raw transaction files from the attendance/access system.
@@ -28,7 +28,7 @@ The main goal is:
 - Compare generated predictions against attendance truth/answer-key files.
 - Allow manual punch simulation for testing one employee/date scenario.
 
-The app is built as a FastAPI backend with static HTML/CSS/JavaScript frontend pages. The active machine learning model and core inference logic live inside the shift_engine_package_v3_fixed_reader directory.
+The app is built as a FastAPI backend with static HTML/CSS/JavaScript frontend pages. The active machine learning model and core inference logic live inside the shift_engine_package_v3_day_first_reader directory.
 
 ============================================================
 2. HIGH LEVEL ARCHITECTURE
@@ -45,12 +45,12 @@ Main parts:
    Purpose: FastAPI server that receives files, validates inputs, calls the shift engine, writes outputs, compares prediction vs attendance truth, and serves frontend files.
 
 3. Active shift engine package
-   Location: shift_engine_package_v3_fixed_reader/
-   Purpose: V3 fixed-reader production inference package using LightGBM and business rules to transform ReaderNumber-based punches into shift predictions.
+   Location: shift_engine_package_v3_day_first_reader/
+   Purpose: V3 day-first production inference package using LightGBM and business rules to transform ReaderNumber-based punches into shift predictions.
 
 4. Backup/older engine packages
-   Location: shift_engine_package/ and shift_engine_package_v2_reader_based/
-   Purpose: Older engine packages kept as backup. The active backend config points to shift_engine_package_v3_fixed_reader/artifacts.
+   Location: shift_engine_package/, shift_engine_package_v2_reader_based/, and shift_engine_package_v3_fixed_reader/
+   Purpose: Older engine packages kept as backup. The active backend config points to shift_engine_package_v3_day_first_reader/artifacts.
 
 5. Runtime folders
    uploads/: Temporary uploaded files are stored here during processing and deleted afterward.
@@ -119,11 +119,21 @@ shift_engine_package_v3_fixed_reader/
     lightgbm_model.txt
     shift_meta.json
 
+shift_engine_package_v3_day_first_reader/
+  app.py
+  inference.py
+  README.md
+  requirements.txt
+  artifacts/
+    config.json
+    feature_cols.json
+    label_classes.json
+    lightgbm_model.txt
+    shift_meta.json
+
 outputs/
   Contains generated prediction and comparison CSV files.
-  At the time this document was created, there were 69 CSV output files:
-  - 53 prediction CSV files
-  - 16 comparison CSV files
+  File counts change over time because every run creates timestamped output files.
 
 requirements.txt
 README.md
@@ -153,7 +163,7 @@ Frontend:
 - Native dialog element for manual prediction modal
 
 Machine learning:
-- LightGBM model loaded from shift_engine_package_v3_fixed_reader/artifacts/lightgbm_model.txt
+- LightGBM model loaded from shift_engine_package_v3_day_first_reader/artifacts/lightgbm_model.txt
 - Model class labels loaded from label_classes.json
 - Feature list loaded from feature_cols.json
 - Shift metadata loaded from shift_meta.json
@@ -182,6 +192,11 @@ From the project root:
 
 Comparison page:
    http://127.0.0.1:8000/comparison
+
+Production hosting:
+- The project is also deployed as a Render web service.
+- Render start command:
+  uvicorn backend.main:app --host 0.0.0.0 --port $PORT
 
 ============================================================
 6. BACKEND CONFIGURATION
@@ -214,7 +229,7 @@ Important settings:
   frontend/assets/
 
 - Active engine artifacts directory:
-  shift_engine_package_v3_fixed_reader/artifacts
+  shift_engine_package_v3_day_first_reader/artifacts
 
 ============================================================
 7. BACKEND API ENDPOINTS
@@ -244,8 +259,40 @@ Output:
   summary
   row_count
   columns
+  page
+  page_size
+  total_pages
+  filtered_row_count
+  filters
   download_url
   debug_download_url
+  data
+
+Notes:
+- This endpoint now returns summary metadata plus the first page of rows instead of the full dataset.
+- This reduces large JSON responses and improves hosted performance.
+
+GET /api/prediction-results/{file_name}
+Query parameters:
+  page
+  page_size
+  search
+  status
+  shift
+  mismatch
+
+Purpose:
+  Load prediction rows page-by-page from a saved prediction output file.
+
+Output:
+  output_file_name
+  columns
+  page
+  page_size
+  total_pages
+  total_rows
+  filtered_row_count
+  filters
   data
 
 POST /api/manual-predict
@@ -334,7 +381,9 @@ Main prediction page features:
 - Shows searchable/filterable results table.
 - Status filter based on final_status_label.
 - Shift filter based on final_shift.
+- Mismatch filter based on prediction_mismatch_status.
 - Pagination with 20 rows per page.
+- Prediction rows are loaded from the backend page-by-page instead of keeping the full dataset in the browser.
 - Clean CSV download button.
 - Full debug CSV download button.
 - Row selection detail panel for advanced/model fields.
@@ -376,6 +425,10 @@ Manual Punch Test frontend:
   Status
   Message
   Raw transactions used
+
+Prediction page data flow:
+- Initial run uses POST /api/predict.
+- Additional search/filter/page changes use GET /api/prediction-results/{file_name}.
 
 Comparison page:
 frontend/comparison.html
@@ -550,15 +603,16 @@ Prediction flow:
 4. Load transaction file using backend file parsing.
 5. Normalize employee and datetime column aliases to EmpCode and TransactionDateTime.
 6. Validate required data.
-7. Run shift_engine_package_v3_fixed_reader.run_inference_debug.
+7. Run shift_engine_package_v3_day_first_reader.run_inference_debug.
 8. Normalize V3 output columns for frontend/API compatibility.
 9. Skip backend calendar completion because the V3 engine already creates complete employee-date rows.
 10. Reorder important output columns.
 11. Write full debug CSV.
 12. Write clean business CSV.
 13. Build response summary.
-14. Convert result dataframe to JSON records for frontend.
-15. Build latest employee history cache for manual prediction support.
+14. Cache the normalized result dataframe in memory for paged reads.
+15. Return only the first page of frontend rows from /api/predict.
+16. Build latest employee history cache for manual prediction support.
 
 Output file naming:
 - Full debug prediction:
@@ -639,7 +693,7 @@ Important limitation:
 ============================================================
 
 Active engine:
-shift_engine_package_v3_fixed_reader/inference.py
+shift_engine_package_v3_day_first_reader/inference.py
 
 The engine:
 - Loads transaction files.
@@ -778,7 +832,7 @@ The engine builds an employee transaction index containing:
 
 For each employee/date:
 - attendance_day is based on the transaction date normalized to midnight.
-- The engine looks at punches from attendance_day to attendance_day + 36 hours.
+- The engine looks at punches from attendance_day to attendance_day + 48 hours.
 - This supports normal shifts and overnight/next-day out punches.
 
 ============================================================
@@ -788,7 +842,7 @@ For each employee/date:
 For every employee/date window, the engine tries to find the best in-out pair candidate.
 
 Candidate search:
-- Uses all punches in the 36-hour window.
+- Uses all punches in the 48-hour window.
 - For each known shift, checks whether a start punch falls within that shift start tolerance.
 - Checks whether a later end punch falls within that shift end tolerance.
 - Rejects spans shorter than min_valid_span.
@@ -1233,7 +1287,7 @@ Time parsing:
 - Extra time-only punches earlier than punch_in are moved to the next day.
 
 Window rule:
-- Uses the engine's window_hours_after value, currently 36 hours.
+- Uses the engine's window_hours_after value, currently 48 hours.
 - At least two punches must be inside the attendance date window.
 
 Manual transaction dataframe columns:
@@ -1269,6 +1323,12 @@ Prediction cache:
 - Cache stores output file paths and generated_at.
 - Cache does not persist after server restart.
 
+Prediction dataframe cache:
+- Stored in memory in ShiftPredictionService.
+- Used by GET /api/prediction-results/{file_name}.
+- Keeps recently normalized prediction dataframes in memory for server-side paging/filtering.
+- Reduces repeated CSV reload/JSON serialization work for large prediction outputs.
+
 Performance logging:
 Backend logs timings for:
 - file hash
@@ -1281,6 +1341,11 @@ Backend logs timings for:
 - CSV generation
 - response serialization
 - total request time
+
+Hosted response optimization:
+- FastAPI GZip middleware is enabled for API responses.
+- Initial prediction responses now return summary plus page 1 only.
+- Frontend filtering and pagination for prediction results now use server-side paging.
 
 Comparison logs timings for:
 - upload save
@@ -1311,7 +1376,8 @@ Shift engine logs timings for:
 - Produces full technical prediction CSV files for analysis.
 
 4. Calendar completion service
-- Adds absent rows for missing employee/date combinations in the uploaded transaction date range.
+- Supports older engines that need backend-generated absent rows.
+- Current V3 day-first engine path skips backend calendar completion because the engine already creates complete employee-date rows.
 
 5. Prediction vs attendance comparison service
 - Benchmarks prediction output against attendance truth files.
@@ -1366,14 +1432,18 @@ Based on the current project files, the following work has already been complete
 30. Prediction cache for comparison was added.
 31. Timing logs were added for prediction and comparison performance.
 32. A ReaderNumber-based v2 engine package exists as a separate package/archive.
-33. Many prediction and comparison output files have already been generated in outputs/.
+33. Server-side prediction paging and filtering were added to reduce hosted response latency.
+34. GZip response compression was added for API payloads.
+35. The project is deployed on Render and linked to the GitHub repository for auto-deploys.
 
 ============================================================
 27. CURRENT LIMITATIONS AND IMPORTANT NOTES
 ============================================================
 
-1. This app is local.
-- It is not currently set up as a deployed/cloud service in the files inspected.
+1. This app can run both locally and on Render.
+- Local development still uses `uvicorn backend.main:app --reload`.
+- Production deployment currently runs on Render.
+- The active Render service is linked to the GitHub repository branch `main`.
 
 2. No database is used.
 - Outputs are stored as CSV files.
@@ -1398,10 +1468,11 @@ Based on the current project files, the following work has already been complete
 - Restarting the backend clears it.
 
 9. Older engine folders exist but are not the active backend engine.
-- The active backend engine uses shift_engine_package_v3_fixed_reader/artifacts.
+- The active backend engine uses shift_engine_package_v3_day_first_reader/artifacts.
 
-10. The project directory is not currently a git repository.
-- git status returned: fatal: not a git repository.
+10. The project is under git.
+- Bitbucket is used as one remote source of truth in this workspace.
+- GitHub is also configured and is the repository currently linked to the Render deployment.
 
 ============================================================
 28. QUICK A-Z PROJECT SUMMARY
@@ -1414,13 +1485,14 @@ B - Backend:
 Handles uploads, validation, prediction, comparison, downloads, and errors.
 
 C - Calendar completion:
-Adds missing employee/date rows and marks them ABSENT.
+Used for engines that need backend-generated missing employee/date rows.
+Current V3 day-first flow skips backend calendar completion.
 
 D - Downloads:
 Clean and debug CSV downloads are available for prediction and comparison.
 
 E - Engine:
-LightGBM-based V3 fixed-reader shift engine in shift_engine_package_v3_fixed_reader.
+LightGBM-based V3 day-first shift engine in shift_engine_package_v3_day_first_reader.
 
 F - Frontend:
 Static HTML/CSS/JS pages for operations and benchmark workflows.
@@ -1435,7 +1507,7 @@ I - Inputs:
 Accepts .csv, .xls, and .xlsx transaction and attendance files.
 
 J - JSON:
-APIs return JSON responses with data, columns, summary, and download links.
+APIs return JSON responses with summary metadata, paged row data, columns, filters, and download links.
 
 K - Known shifts:
 PF, PGM, PS, PT are active model label classes.
@@ -1455,35 +1527,35 @@ Both business-friendly clean files and full debug files are produced.
 P - Prediction:
 Raw transaction punches are converted into final_shift and final_status_label.
 
-Q - Quality checks:
+Q - Query paging:
+Prediction results are fetched page-by-page from the backend to reduce large hosted payloads.
+
+R - Quality checks:
 Validation catches empty files, missing columns, invalid datetimes, invalid employees, unsupported file types, and oversized uploads.
 
-R - Review:
+S - Render:
+The application is deployed on Render and currently pulls from the GitHub `main` branch.
+
+T - Review:
 Uncertain rows are marked SHIFT_REVIEW or WO_REVIEW instead of being counted as hard predictions.
 
-S - Summary:
+U - Summary:
 Frontend shows summary cards for prediction and comparison metrics.
 
-T - Timings:
+V - Timings:
 Backend and engine log request and inference timing.
 
-U - Uploads:
+W - Uploads:
 Temporary uploaded files are saved to uploads/ and deleted after processing.
 
-V - Validation:
+X - Validation:
 Required columns and supported aliases are checked before prediction.
 
-W - Weekly off:
+Y - Weekly off:
 Sunday transactions are marked WO_REVIEW.
 
-X - Excel:
+Z - Excel:
 .xls and .xlsx files are supported through pandas/openpyxl/xlrd fallback behavior.
-
-Y - Year/date handling:
-Prediction uses actual transaction dates and a 36-hour window from each employee attendance day.
-
-Z - Zero transaction days:
-Missing employee-date transaction rows are filled as ABSENT by the V3 engine calendar.
 
 ============================================================
 END OF DOCUMENTATION

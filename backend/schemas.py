@@ -110,12 +110,33 @@ class ComparisonSummary(BaseModel):
     shift_mismatches: int
 
 
+class ComparisonFilterOptions(BaseModel):
+    results: list[str]
+
+
+class ComparisonPageResponse(BaseModel):
+    output_file_name: str
+    columns: list[str]
+    page: int
+    page_size: int
+    total_pages: int
+    total_rows: int
+    filtered_row_count: int
+    filters: ComparisonFilterOptions
+    data: list[dict[str, Any]]
+
+
 class CompareResponse(BaseModel):
     output_file_name: str
     generated_at: datetime
     summary: ComparisonSummary
     row_count: int
     columns: list[str]
+    page: int
+    page_size: int
+    total_pages: int
+    filtered_row_count: int
+    filters: ComparisonFilterOptions
     download_url: str
     debug_download_url: Optional[str] = None
     data: list[dict[str, Any]]

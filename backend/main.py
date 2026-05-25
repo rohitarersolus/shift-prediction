@@ -12,6 +12,8 @@ from starlette.concurrency import run_in_threadpool
 from backend.config import ensure_runtime_directories, settings
 from backend.schemas import (
     CompareResponse,
+    ComparisonFilterOptions,
+    ComparisonPageResponse,
     ErrorResponse,
     HealthResponse,
     ManualPredictRequest,
@@ -224,6 +226,15 @@ async def compare(
             attendance_name=saved_attendance.original_name,
             prediction_path=prediction_result.output_path,
             prediction_name=prediction_result.output_file_name,
+            include_records=False,
+        )
+        page_result = await run_in_threadpool(
+            comparison_service.get_comparison_page,
+            comparison_result.output_file_name,
+            page=1,
+            page_size=25,
+            search="",
+            result="ALL",
         )
         timings["comparison_only"] = perf_counter() - started
     finally:
@@ -245,10 +256,45 @@ async def compare(
         generated_at=comparison_result.generated_at,
         summary=comparison_result.summary,
         row_count=comparison_result.summary["matched_rows"],
-        columns=comparison_result.columns,
+        columns=page_result.columns,
+        page=page_result.page,
+        page_size=page_result.page_size,
+        total_pages=page_result.total_pages,
+        filtered_row_count=page_result.filtered_row_count,
+        filters=ComparisonFilterOptions(results=page_result.available_results),
         download_url=f"/api/download-comparison/{comparison_result.clean_output_file_name}",
         debug_download_url=f"/api/download-comparison/{comparison_result.output_file_name}",
-        data=comparison_result.records,
+        data=page_result.records,
+    )
+
+
+@app.get("/api/comparison-results/{file_name}", response_model=ComparisonPageResponse)
+async def comparison_results(
+    file_name: str,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=200),
+    search: str = Query(default=""),
+    result: str = Query(default="ALL"),
+) -> ComparisonPageResponse:
+    page_result = await run_in_threadpool(
+        comparison_service.get_comparison_page,
+        file_name,
+        page=page,
+        page_size=page_size,
+        search=search,
+        result=result,
+    )
+
+    return ComparisonPageResponse(
+        output_file_name=page_result.output_file_name,
+        columns=page_result.columns,
+        page=page_result.page,
+        page_size=page_result.page_size,
+        total_pages=page_result.total_pages,
+        total_rows=page_result.total_rows,
+        filtered_row_count=page_result.filtered_row_count,
+        filters=ComparisonFilterOptions(results=page_result.available_results),
+        data=page_result.records,
     )
 
 
